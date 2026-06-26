@@ -73,6 +73,25 @@ VIRTUAL_PS5 = dict(
 
 VIRTUAL_NAMES = {VIRTUAL_XBOX["name"], VIRTUAL_PS5["name"]}
 
+# Some controllers expose a non-standard evdev button layout via their kernel
+# driver; a raw passthrough then mismatches what SDL expects for the *target*
+# identity (buttons land wrong / dead). Per source (vendor, product): source
+# evdev code → standard gamepad code. Codes not listed pass through unchanged.
+# Empirically mapped by position (see controller-setup.md, Problem 4).
+QUIRK_BUTTON_MAP = {
+    (0x045e, 0x02e0): {            # Xbox One S — old Bluetooth firmware
+        e.BTN_C:    e.BTN_WEST,    # X
+        e.BTN_WEST: e.BTN_TL,      # LB
+        e.BTN_Z:    e.BTN_TR,      # RB
+        e.BTN_TL:   e.BTN_SELECT,  # View
+        e.BTN_TR:   e.BTN_START,   # Menu
+        e.KEY_MENU: e.BTN_MODE,    # Xbox / Guide
+        e.BTN_TL2:  e.BTN_THUMBL,  # L3
+        e.BTN_TR2:  e.BTN_THUMBR,  # R3
+        # A→BTN_A(=SOUTH), B→BTN_B(=EAST), Y→BTN_NORTH already standard.
+    },
+}
+
 # DBus names
 BUS_NAME  = "org.kde.StatusNotifierItem-ctrlmgr-1"
 ITEM_PATH = "/StatusNotifierItem"
@@ -140,10 +159,11 @@ def hidraw_gate(action, node):
 class Remapper(threading.Thread):
     """Grabs a source controller and emits a virtual target device."""
 
-    def __init__(self, src_path, target_spec):
+    def __init__(self, src_path, target_spec, button_map=None):
         super().__init__(daemon=True)
         self._src_path   = src_path
         self._target     = target_spec
+        self._button_map = button_map or {}
         self._stop_event = threading.Event()
         self._ui         = None
         self._virtual_path = None
@@ -175,6 +195,12 @@ class Remapper(threading.Thread):
         caps.pop(e.EV_SYN, None)
         caps.pop(e.EV_FF,  None)
 
+        # Advertise the translated (standard) key codes, else SDL maps the
+        # target identity against the source's non-standard codes.
+        if self._button_map and e.EV_KEY in caps:
+            caps[e.EV_KEY] = list(dict.fromkeys(
+                self._button_map.get(c, c) for c in caps[e.EV_KEY]))
+
         try:
             ui = UInput(events=caps, **self._target)
         except Exception as ex:
@@ -199,7 +225,10 @@ class Remapper(threading.Thread):
                 if self._stop_event.is_set():
                     break
                 if event.type in (e.EV_KEY, e.EV_ABS, e.EV_REL):
-                    ui.write(event.type, event.code, event.value)
+                    code = event.code
+                    if event.type == e.EV_KEY and self._button_map:
+                        code = self._button_map.get(code, code)
+                    ui.write(event.type, code, event.value)
                     ui.syn()
         except OSError:
             pass
@@ -252,7 +281,8 @@ class ControllerInstance:
             # Hide this pad's raw HID node from Wine/Proton before the remapper
             # takes over (the evdev grab alone does not cover hidraw).
             hidraw_gate("block", self.hidraw)
-            r = Remapper(self.path, target)
+            bmap = QUIRK_BUTTON_MAP.get((self.vendor, self.product))
+            r = Remapper(self.path, target, bmap)
             r.start()
             self._remap = r
         else:
