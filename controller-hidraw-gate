@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # controller-hidraw-gate — block/restore raw HID access to a SINGLE game
-# controller's /dev/hidraw node, so Wine/Proton (winebus) and other userspace
-# cannot read the physical pad while controller-manager remaps it to a virtual
-# pad.
+# controller's /dev/hidraw node, so applications that read controllers directly
+# from /dev/hidraw* cannot see the physical pad while controller-manager remaps
+# it to a virtual pad.
 #
 #   controller-hidraw-gate block|restore /dev/hidrawN
 #
@@ -10,13 +10,13 @@
 # controllers be gated independently.
 #
 # Safety: only /dev/hidraw* nodes are ever chmod'd, and only if the node
-# belongs to a HID device of a known gaming vendor — so this can't be aimed at
-# unrelated HID hardware (keyboards, fingerprint readers, …). Meant to be
+# belongs to a HID device of a known controller vendor — so this can't be aimed
+# at unrelated HID hardware (keyboards, fingerprint readers, …). Meant to be
 # invoked through a tightly-scoped NOPASSWD sudoers rule.
 
 set -euo pipefail
 
-# Gaming vendors whose hidraw nodes we are willing to gate (hex, upper-case):
+# Controller vendors whose hidraw nodes we are willing to gate (hex, upper-case):
 # Microsoft, Sony, Valve, Nintendo, 8BitDo, Hori.
 GAMING_VENDORS=( 045E 054C 28DE 057E 2DC8 0F0D )
 
