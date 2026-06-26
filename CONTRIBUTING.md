@@ -51,6 +51,12 @@ Check a message with:
 ./scripts/commit-msg-lint.sh "fix(manager): wake the remapper loop on stop"
 ```
 
+To enforce the format automatically on every commit, install the script as a hook:
+
+```bash
+ln -s ../../scripts/commit-msg-lint.sh .git/hooks/commit-msg
+```
+
 Do not include AI/assistant attribution trailers in commit messages.
 
 ## Documentation
