@@ -3,8 +3,9 @@
 Controller Manager — unified tray + per-controller remapping.
 
 Supports:
-  PS5 DualSense  →  nativ  |  als Xbox 360 ausgeben
-  Xbox Controller →  nativ  (xbox→ps5 unusable in games, see Problem 4)
+  PlayStation DualSense  ->  native  |  output as Xbox 360
+  Xbox controller        ->  native  (xbox->ps5 unusable in apps; see
+                                       docs/decisions/output-protocol-constraints.md)
 Multiple controllers simultaneously, each with its own mode.
 """
 
@@ -16,7 +17,7 @@ from gi.repository import GLib
 
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 
-# ── Konstanten ───────────────────────────────────────────────────────────────
+# ── Constants ────────────────────────────────────────────────────────────────
 
 CONFIG_FILE = os.path.expanduser("~/.config/controller-modes.json")
 
@@ -49,18 +50,19 @@ DEFAULT_MODES = {
 }
 
 MODE_LABELS = {
-    "ps5-native":  "PS5 nativ",
-    "ps5-xbox":    "Als Xbox ausgeben",
-    "xbox-native": "Xbox nativ",
-    "xbox-ps5":    "Als PS5 ausgeben",
+    "ps5-native":  "PS5 native",
+    "ps5-xbox":    "Output as Xbox",
+    "xbox-native": "Xbox native",
+    "xbox-ps5":    "Output as PS5",
 }
 
 # Modes offered in the tray menu per family. "xbox-ps5" is intentionally NOT
-# listed: the evdev translation is correct, but SDL/Proton reads Sony VID:PIDs
-# via HIDAPI (hidraw) and a virtual uinput pad has no hidraw node, so only axes
-# (not buttons) reach games — unusable in practice. See controller-setup.md,
-# Problem 4. The translation infrastructure (VIRTUAL_PS5 / QUIRK_BUTTON_MAP /
-# _target_for_mode) is kept so a future uhid-based fix can re-enable it.
+# listed: the evdev translation is correct, but applications read PlayStation
+# VID:PIDs via a HID API (hidraw) and a virtual uinput pad has no hidraw node,
+# so only axes (not buttons) reach applications — unusable in practice. See
+# docs/decisions/output-protocol-constraints.md. The translation infrastructure
+# (VIRTUAL_PS5 / QUIRK_BUTTON_MAP / _target_for_mode) is kept so a future
+# uhid-based fix can re-enable it.
 MODES_FOR_FAMILY = {
     "ps5":  ["ps5-native",  "ps5-xbox"],
     "xbox": ["xbox-native"],
@@ -83,7 +85,7 @@ VIRTUAL_NAMES = {VIRTUAL_XBOX["name"], VIRTUAL_PS5["name"]}
 # driver; a raw passthrough then mismatches what SDL expects for the *target*
 # identity (buttons land wrong / dead). Per source (vendor, product): source
 # evdev code → standard gamepad code. Codes not listed pass through unchanged.
-# Empirically mapped by position (see controller-setup.md, Problem 4).
+# Empirically mapped by position (see docs/decisions/remapping-engine.md).
 QUIRK_BUTTON_MAP = {
     (0x045e, 0x02e0): {            # Xbox One S — old Bluetooth firmware
         e.BTN_C:    e.BTN_WEST,    # X
@@ -120,12 +122,12 @@ def save_config(cfg):
 
 # ── hidraw gate ──────────────────────────────────────────────────────────────
 #
-# An evdev grab (EVIOCGRAB) only blocks the evdev node. Wine/Proton's winebus
-# reads game controllers straight from /dev/hidraw*, so a remapped DualSense
-# would still reach the game as a PS5 pad — in parallel with our virtual Xbox
-# pad — causing double input. We therefore chmod the physical controller's
-# hidraw node to 000 for the duration of any remap. This is system-wide and
-# launcher-agnostic: it hides the pad from Steam, Lutris, umu and native games
+# An evdev grab (EVIOCGRAB) only blocks the evdev node. Some applications
+# read game controllers straight from /dev/hidraw*, so a remapped DualSense
+# would still reach the application as a PlayStation pad — in parallel with our
+# virtual Xbox pad — causing double input. We therefore chmod the physical
+# controller's hidraw node to 000 for the duration of any remap. This is
+# system-wide and launcher-agnostic: it hides the pad from every application
 # alike. The chmod needs root, delegated to a tightly-scoped helper via a
 # NOPASSWD sudoers rule. If the helper/rule is absent, this is a silent no-op.
 #
@@ -297,7 +299,7 @@ class ControllerInstance:
 
         target = self._target_for_mode()
         if target:
-            # Hide this pad's raw HID node from Wine/Proton before the remapper
+            # Hide this pad's raw HID node from applications before the remapper
             # takes over (the evdev grab alone does not cover hidraw).
             hidraw_gate("block", self.hidraw)
             bmap = QUIRK_BUTTON_MAP.get((self.vendor, self.product))
@@ -481,7 +483,7 @@ class DbusmenuServer(dbus.service.Object):
 
         # Final separator + Quit
         items.append(self._make_item(id_, {"type": dbus.String("separator")}))
-        items.append(self._make_item(QUIT_ID, {"label": dbus.String("Beenden"),
+        items.append(self._make_item(QUIT_ID, {"label": dbus.String("Quit"),
                                                 "enabled": dbus.Boolean(True)}))
         return items
 
@@ -601,9 +603,9 @@ class TrayIcon(dbus.service.Object):
             title = f"Controller ({len(active_remaps)} remapped)"
         else:
             icon  = "input-gaming-symbolic"
-            title = "Controller (alle nativ)"
+            title = "Controller (all native)"
         n = len(instances)
-        tip = f"{n} Controller verbunden" if n else "Kein Controller"
+        tip = f"{n} controller(s) connected" if n else "No controller"
 
         return {
             "Category":      dbus.String("Hardware"),
