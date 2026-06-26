@@ -9,12 +9,18 @@ cd "$(dirname "$(readlink -f "$0")")"
 echo "==> User-space (controller-manager + service)"
 install -D -m 0755 controller-manager.py       "$HOME/.local/bin/controller-manager.py"
 install -D -m 0644 controller-manager.service  "$HOME/.config/systemd/user/controller-manager.service"
-# Reference doc — kept on the Desktop for convenience (comment out if unwanted).
-install -D -m 0644 controller-setup.md         "$HOME/Desktop/controller-setup.md"
 
 echo "==> Root-space (hidraw gate + sudoers) — sudo required"
-sudo install -m 0755 -o root -g root controller-hidraw-gate    /usr/local/bin/controller-hidraw-gate
-sudo install -m 0440 -o root -g root controller-hidraw.sudoers /etc/sudoers.d/controller-hidraw
+sudo install -m 0755 -o root -g root controller-hidraw-gate /usr/local/bin/controller-hidraw-gate
+
+# Render the sudoers rule for the installing user, validate it in isolation,
+# then install it. Validating before placement avoids leaving a broken file in
+# /etc/sudoers.d.
+rendered_sudoers="$(mktemp)"
+trap 'rm -f "$rendered_sudoers"' EXIT
+sed "s/__INSTALL_USER__/$(id -un)/" controller-hidraw.sudoers > "$rendered_sudoers"
+sudo visudo -cf "$rendered_sudoers"
+sudo install -m 0440 -o root -g root "$rendered_sudoers" /etc/sudoers.d/controller-hidraw
 sudo visudo -c
 
 echo "==> Reload + restart user service"

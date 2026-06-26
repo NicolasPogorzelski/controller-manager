@@ -1,4 +1,7 @@
-# Let controller-manager (running as admin) gate raw HID access to remapped
-# game controllers without a password. Scoped to the single root-owned helper;
-# the helper only ever chmods /dev/hidraw* nodes of allowlisted controllers.
-admin ALL=(root) NOPASSWD: /usr/local/bin/controller-hidraw-gate
+# Allow controller-manager (running as the installing user) to gate raw HID
+# access to remapped controllers without a password. Scoped to the single
+# root-owned helper; the helper only ever chmods /dev/hidraw* nodes of
+# allowlisted controllers.
+#
+# The first field is the installing user; install.sh substitutes it.
+__INSTALL_USER__ ALL=(root) NOPASSWD: /usr/local/bin/controller-hidraw-gate
