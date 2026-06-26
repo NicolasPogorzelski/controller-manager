@@ -1,4 +1,4 @@
 __pycache__/
 *.pyc
-# Laufzeit-State, gehört nicht ins Repo:
+# Runtime state, not part of the repo:
 controller-modes.json

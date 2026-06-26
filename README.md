@@ -1,38 +1,150 @@
-# controller-manager
+# Controller Manager
 
-Systemweite Controller-Verwaltung für Bazzite (GNOME/Wayland): remappt
-PS5-DualSense ↔ Xbox-Controller über ein permanentes Tray-Icon, damit Spiele
-(Steam, Lutris/umu, native) jeden Controller im gewünschten Protokoll sehen —
-unabhängig vom Launcher.
+[![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/) [![Linux](https://img.shields.io/badge/Linux-evdev%20%2F%20uinput-FCC624?logo=linux&logoColor=black)](https://www.kernel.org/doc/html/latest/input/uinput.html) [![D-Bus](https://img.shields.io/badge/Tray-StatusNotifierItem-4A86CF)](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/) [![systemd](https://img.shields.io/badge/Service-systemd%20user-30D475?logo=systemd&logoColor=white)](https://www.freedesktop.org/software/systemd/man/systemd.user.html) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-| Controller | Modus | Ergebnis |
-|---|---|---|
-| PS5 DualSense | PS5 nativ | roher DualSense ans System |
-| PS5 DualSense | Als Xbox ausgeben | virtueller Xbox-360-Pad |
-| Xbox Controller | Xbox nativ | kein Remapping |
+A small system-wide daemon that remaps game controllers between protocols on Linux,
+controlled from a tray icon. It presents a physical controller to applications under a
+different identity — for example, exposing a Sony DualSense as an Xbox 360 pad so that
+applications which only speak the XInput protocol see a controller they understand.
 
-(„Xbox → Als PS5 ausgeben" wird nicht angeboten — funktioniert in Spielen nicht, siehe `controller-setup.md` Problem 4.)
+## About
 
-## Komponenten
+Many games and applications support only one controller protocol. A title that expects
+**XInput** (the Xbox protocol) will not recognise a controller that registers itself as a
+PlayStation device, even though both are ordinary gamepads. The usual workarounds are
+per-application and fragile.
 
-| Datei | Ziel | Zweck |
-|---|---|---|
-| `controller-manager.py` | `~/.local/bin/` | Daemon: Tray (StatusNotifierItem + dbusmenu), evdev-Grab + UInput-Remapping, Hotplug |
-| `controller-manager.service` | `~/.config/systemd/user/` | systemd-User-Service (Autostart) |
-| `controller-hidraw-gate` | `/usr/local/bin/` (root) | sperrt/öffnet `/dev/hidraw*` eines remappten Pads, damit Wine/Proton (winebus) den physischen Controller nicht parallel liest |
-| `controller-hidraw.sudoers` | `/etc/sudoers.d/controller-hidraw` | NOPASSWD, eng auf den Helper begrenzt |
+Controller Manager solves this once, at the system level: it grabs the physical device
+on the kernel's input layer and re-emits its events through a **virtual** controller of
+the target type, before any application enumerates devices. The remap is selected per
+controller from a tray menu and applies uniformly to every launcher and application —
+there is no per-application configuration.
 
-Laufzeit-Modi liegen in `~/.config/controller-modes.json` (nicht im Repo).
+This repository is a self-contained tool and a worked example of a Linux input pipeline:
+`evdev` device grabbing, `uinput` virtual devices, raw HID access control, and a
+`StatusNotifierItem` tray served directly over D-Bus.
+
+## Features
+
+- **Per-controller remapping** — each connected controller has its own mode (native or
+  remapped), chosen from the tray.
+- **Multiple controllers at once** — two identical pads are tracked independently via a
+  stable per-device identity, so one can be native while the other is remapped.
+- **Launcher-agnostic** — works at the device layer, so every application sees the result
+  regardless of how it was started.
+- **Raw HID gating** — closes the double-input gap that an `evdev` grab alone leaves open
+  (see [the hidraw gate decision](docs/decisions/hidraw-gate.md)).
+- **Hotplug aware** — controllers may be connected and disconnected at any time; the tray
+  menu updates automatically.
+- **No daemon dependencies beyond the standard desktop stack** — `python-evdev`,
+  `dbus-python`, and `PyGObject`.
+
+## How it works
+
+```
+Physical controller (evdev /dev/input/eventX)
+   │
+   ├── native mode ──────────► device passes through unchanged
+   │
+   └── remap mode
+         ├── evdev grab (EVIOCGRAB)     exclusive kernel access to the source
+         ├── uinput virtual device      the target-protocol controller
+         ├── event loop                 forward EV_KEY / EV_ABS / EV_REL
+         └── hidraw gate                hide the source's raw HID node from applications
+```
+
+A `StatusNotifierItem` tray icon (served over D-Bus, no toolkit dependency) exposes the
+per-controller mode menu. See [docs/architecture/overview.md](docs/architecture/overview.md)
+for the full design.
+
+## Requirements
+
+- A modern Linux desktop with a **user systemd session**.
+- A tray host that implements the **StatusNotifierItem** specification (most desktops do,
+  some require an extension).
+- Write access to **`/dev/uinput`** (granted by group membership on most distributions).
+- Runtime packages:
+
+  | Package (typical name) | Purpose |
+  |---|---|
+  | `python3-evdev` | read input devices, create `uinput` virtual devices |
+  | `python3-dbus` (`dbus-python`) | serve the tray item and menu over D-Bus |
+  | `python3-gi` (PyGObject) | GLib main loop |
 
 ## Installation
 
 ```bash
-./install.sh        # deployt alles; fragt einmal nach sudo (Gate + sudoers)
-systemctl --user enable controller-manager.service   # Autostart, einmalig
+git clone https://github.com/NicolasPogorzelski/controller-manager.git
+cd controller-manager
+./install.sh
 ```
 
-## Hintergrund / Designentscheidungen
+`install.sh` deploys the user-space daemon and service, then installs the root-owned
+hidraw gate helper and its sudoers rule (this step asks for a password). For the full
+procedure with verification and rollback, follow the
+[installation runbook](runbooks/install.md).
 
-Ausführliche Problem-/Fallstrick-Analyse (warum der evdev-Grab allein nicht
-reicht, hidraw-Gate, Steam-Input-Flags, fgmod vs. bgmod, …) in
-[`controller-setup.md`](controller-setup.md).
+Enable autostart with the desktop session:
+
+```bash
+systemctl --user enable --now controller-manager.service
+```
+
+## Usage
+
+Open the tray icon to see every connected controller and its available modes as radio
+items. Selecting a mode applies it immediately and persists it.
+
+| Controller family | Modes offered |
+|---|---|
+| PlayStation (DualSense) | **Native** · **Output as Xbox** |
+| Xbox | **Native** |
+
+The reverse direction (output a PlayStation identity from an Xbox pad) is intentionally
+not offered; see [output protocol constraints](docs/decisions/output-protocol-constraints.md)
+for why.
+
+## Configuration
+
+Modes are persisted per device in `~/.config/controller-modes.json`. The key is the
+controller's stable identity (its `uniq`, e.g. the Bluetooth MAC) so that two identical
+controllers keep separate settings:
+
+```json
+{
+  "ac:36:1b:70:70:e8": "ps5-xbox",
+  "48:18:8d:53:37:6e": "ps5-native"
+}
+```
+
+The file is managed by the daemon; it is normally not edited by hand. A stored mode that
+is no longer offered for a controller family falls back to that family's native default.
+
+## Supported controllers
+
+Controllers are recognised by **vendor plus gamepad capability**, not a fixed product-ID
+list, so unlisted models of a known vendor still work. Product IDs are used only for
+nicer display names. Tested families: Sony DualSense and Microsoft Xbox One / Series
+pads, over USB and Bluetooth.
+
+## Documentation
+
+- [Architecture Overview](docs/architecture/overview.md)
+- Design decisions:
+  - [Remapping engine — evdev grab + uinput](docs/decisions/remapping-engine.md)
+  - [The hidraw gate](docs/decisions/hidraw-gate.md)
+  - [Per-device identity](docs/decisions/per-device-identity.md)
+  - [Output protocol constraints](docs/decisions/output-protocol-constraints.md)
+- [Troubleshooting / known issues](docs/troubleshooting.md)
+- Runbooks:
+  - [Installation](runbooks/install.md)
+  - [Verify a remap](runbooks/verify-remapping.md)
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the commit format,
+validation script, and documentation conventions.
+
+## License
+
+[MIT](LICENSE)

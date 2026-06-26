@@ -1,0 +1,78 @@
+# Runbook: Installation
+
+Deploy the daemon, the systemd user service, and the root-owned hidraw gate into their
+live locations.
+
+## Preconditions
+
+- A modern Linux desktop with a **user systemd session** and a StatusNotifierItem tray.
+- Runtime packages present: `python3-evdev`, `python3-dbus` (`dbus-python`),
+  `python3-gi` (PyGObject).
+- Write access to `/dev/uinput` (group membership on most distributions).
+- `sudo` rights for the privileged step (installing the helper and sudoers rule).
+- The repository checked out locally.
+
+## Steps
+
+```bash
+cd controller-manager
+./install.sh
+```
+
+`install.sh` performs:
+
+1. **User space** (no privileges):
+   - `controller-manager.py` → `~/.local/bin/controller-manager.py`
+   - `controller-manager.service` → `~/.config/systemd/user/controller-manager.service`
+2. **Root space** (asks for a password):
+   - `controller-hidraw-gate` → `/usr/local/bin/controller-hidraw-gate` (root, `0755`)
+   - `controller-hidraw.sudoers` → `/etc/sudoers.d/controller-hidraw` (root, `0440`)
+   - `visudo -c` to validate the sudoers files
+3. **Service**: `daemon-reload` and restart, then prints the active state.
+
+Enable autostart with the session:
+
+```bash
+systemctl --user enable --now controller-manager.service
+```
+
+## Verification
+
+```bash
+# Service is running
+systemctl --user is-active controller-manager.service        # → active
+
+# Privileged helper is in place and root-owned
+ls -l /usr/local/bin/controller-hidraw-gate                  # → -rwxr-xr-x root root
+sudo visudo -cf /etc/sudoers.d/controller-hidraw             # → parsed OK
+```
+
+The tray icon should appear and list connected controllers with their modes. To confirm
+the remapping path end to end, follow [verify a remap](verify-remapping.md).
+
+## Failure modes
+
+| Symptom | Check |
+|---|---|
+| `install.sh` aborts at the root step | `sudo` requires a password / is unavailable; run it in an interactive shell |
+| Service is `failed` after restart | `journalctl --user -u controller-manager.service -n 30` — usually a missing Python dependency |
+| Tray icon never appears | StatusNotifierItem tray host missing — see [troubleshooting](../docs/troubleshooting.md) |
+| Remap produces double input | hidraw gate not installed or active — see [the hidraw gate](../docs/decisions/hidraw-gate.md) |
+
+## Rollback
+
+```bash
+# Stop and disable the service
+systemctl --user disable --now controller-manager.service
+
+# Remove user-space files
+rm -f ~/.local/bin/controller-manager.py \
+      ~/.config/systemd/user/controller-manager.service
+systemctl --user daemon-reload
+
+# Remove root-space files
+sudo rm -f /usr/local/bin/controller-hidraw-gate /etc/sudoers.d/controller-hidraw
+```
+
+The configuration at `~/.config/controller-modes.json` is left in place; delete it too for
+a clean slate.
