@@ -1,0 +1,13 @@
+[Unit]
+Description=Controller Manager (Tray + Remapping)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=python3 /home/admin/.local/bin/controller-manager.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

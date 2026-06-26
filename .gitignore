@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# Laufzeit-State, gehört nicht ins Repo:
+controller-modes.json
