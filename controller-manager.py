@@ -8,7 +8,7 @@ Supports:
 Multiple controllers simultaneously, each with its own mode.
 """
 
-import os, sys, json, signal, threading, time, subprocess, glob
+import os, sys, json, signal, threading, time, subprocess, glob, selectors
 import evdev
 from evdev import UInput, ecodes as e
 import dbus, dbus.service, dbus.mainloop.glib
@@ -173,7 +173,11 @@ class Remapper(threading.Thread):
         self._stop_event = threading.Event()
         self._ui         = None
         self._virtual_path = None
-        self._src_dev    = None
+        # Self-pipe to wake the read loop deterministically on stop(). Closing
+        # the source fd from another thread does NOT reliably interrupt a read()
+        # blocked on an idle device (Linux), which previously leaked the thread
+        # and its virtual uinput device. select() on this pipe avoids that.
+        self._wake_r, self._wake_w = os.pipe()
 
     @property
     def virtual_path(self):
@@ -181,13 +185,10 @@ class Remapper(threading.Thread):
 
     def stop(self):
         self._stop_event.set()
-        # Close the fd so read_loop() unblocks immediately instead of waiting for an event
-        dev = self._src_dev
-        if dev is not None:
-            try:
-                dev.close()
-            except Exception:
-                pass
+        try:
+            os.write(self._wake_w, b"x")
+        except OSError:
+            pass
 
     def run(self):
         try:
@@ -195,7 +196,6 @@ class Remapper(threading.Thread):
         except Exception as ex:
             print(f"remapper: cannot open {self._src_path}: {ex}", file=sys.stderr)
             return
-        self._src_dev = src
 
         caps = src.capabilities()
         caps.pop(e.EV_SYN, None)
@@ -226,22 +226,35 @@ class Remapper(threading.Thread):
         print(f"remapper: {src.name} → {self._target['name']} "
               f"({self._virtual_path})", file=sys.stderr)
 
+        sel = selectors.DefaultSelector()
+        sel.register(src.fileno(), selectors.EVENT_READ)
+        sel.register(self._wake_r,  selectors.EVENT_READ)
         try:
-            for event in src.read_loop():
-                if self._stop_event.is_set():
-                    break
-                if event.type in (e.EV_KEY, e.EV_ABS, e.EV_REL):
-                    code = event.code
-                    if event.type == e.EV_KEY and self._button_map:
-                        code = self._button_map.get(code, code)
-                    ui.write(event.type, code, event.value)
-                    ui.syn()
+            while not self._stop_event.is_set():
+                for key, _ in sel.select():
+                    if key.fd == self._wake_r:        # stop() signalled
+                        self._stop_event.set()
+                        break
+                    for event in src.read():          # all currently queued events
+                        if event.type in (e.EV_KEY, e.EV_ABS, e.EV_REL):
+                            code = event.code
+                            if event.type == e.EV_KEY and self._button_map:
+                                code = self._button_map.get(code, code)
+                            ui.write(event.type, code, event.value)
+                            ui.syn()
         except OSError:
             pass
         finally:
+            sel.close()
             try: src.ungrab()
             except Exception: pass
+            try: src.close()
+            except Exception: pass
             try: ui.close()
+            except Exception: pass
+            try: os.close(self._wake_r)
+            except Exception: pass
+            try: os.close(self._wake_w)
             except Exception: pass
             self._virtual_path = None
             print(f"remapper: stopped for {self._src_path}", file=sys.stderr)
