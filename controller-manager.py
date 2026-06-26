@@ -8,7 +8,7 @@ Supports:
 Multiple controllers simultaneously, each with its own mode.
 """
 
-import os, sys, json, signal, threading, time, subprocess
+import os, sys, json, signal, threading, time, subprocess, glob
 import evdev
 from evdev import UInput, ecodes as e
 import dbus, dbus.service, dbus.mainloop.glib
@@ -21,15 +21,26 @@ dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 CONFIG_FILE = os.path.expanduser("~/.config/controller-modes.json")
 
 # (vendor, product) → (display name, controller family)
-KNOWN_CONTROLLERS = {
-    (0x054c, 0x0ce6): ("DualSense",       "ps5"),
-    (0x054c, 0x0df2): ("DualSense Edge",  "ps5"),
-    (0x045e, 0x028e): ("Xbox 360",        "xbox"),
-    (0x045e, 0x028f): ("Xbox 360 W",      "xbox"),
-    (0x045e, 0x02ea): ("Xbox One",        "xbox"),
-    (0x045e, 0x02fd): ("Xbox One S",      "xbox"),
-    (0x045e, 0x0b20): ("Xbox Series X/S", "xbox"),
-    (0x045e, 0x0b12): ("Xbox Series X/S", "xbox"),
+# Recognise controllers by USB/BT vendor + gamepad capability rather than a
+# fixed product-ID list (which keeps missing models — e.g. the BT Xbox pad
+# 045e:02e0). Vendor → controller family.
+VENDOR_FAMILY = {
+    0x054c: "ps5",    # Sony
+    0x045e: "xbox",   # Microsoft
+}
+
+# Optional nicer display names per (vendor, product); falls back to the kernel
+# device name when unknown.
+CONTROLLER_NAMES = {
+    (0x054c, 0x0ce6): "DualSense",
+    (0x054c, 0x0df2): "DualSense Edge",
+    (0x045e, 0x028e): "Xbox 360",
+    (0x045e, 0x02ea): "Xbox One",
+    (0x045e, 0x02fd): "Xbox One S",
+    (0x045e, 0x02e0): "Xbox One S (BT)",
+    (0x045e, 0x0b12): "Xbox Series X/S",
+    (0x045e, 0x0b13): "Xbox Series X/S (BT)",
+    (0x045e, 0x0b20): "Xbox Series X/S",
 }
 
 DEFAULT_MODES = {
@@ -92,22 +103,36 @@ def save_config(cfg):
 # launcher-agnostic: it hides the pad from Steam, Lutris, umu and native games
 # alike. The chmod needs root, delegated to a tightly-scoped helper via a
 # NOPASSWD sudoers rule. If the helper/rule is absent, this is a silent no-op.
+#
+# The gate operates on a SPECIFIC hidraw node (not a VID:PID), so two identical
+# controllers (same VID:PID, different physical device) can be gated indepen-
+# dently — only the remapped one is hidden.
 
 GATE_BIN = "/usr/local/bin/controller-hidraw-gate"
 
-def hidraw_gate(action, vendor, product):
-    """action: 'block' | 'restore'. No-op if helper or sudo rule missing."""
-    if not os.path.exists(GATE_BIN):
+def hidraw_for_event(ev_path):
+    """Return /dev/hidrawN belonging to the same HID device as an evdev node,
+    or None (e.g. xpad Xbox pads expose no hidraw)."""
+    base = f"/sys/class/input/{os.path.basename(ev_path)}/device"
+    if not os.path.exists(base):
+        return None
+    hid_dir = os.path.realpath(os.path.join(base, "..", ".."))
+    nodes = glob.glob(os.path.join(hid_dir, "hidraw", "hidraw*"))
+    return f"/dev/{os.path.basename(nodes[0])}" if nodes else None
+
+def hidraw_gate(action, node):
+    """action: 'block' | 'restore'; node: /dev/hidrawN or None.
+    No-op if there is no hidraw node, or the helper/sudo rule is missing."""
+    if not node or not os.path.exists(GATE_BIN):
         return
-    vidpid = f"{vendor:04x}:{product:04x}"
     try:
         subprocess.run(
-            ["sudo", "-n", GATE_BIN, action, vidpid],
+            ["sudo", "-n", GATE_BIN, action, node],
             timeout=5, check=False,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except Exception as ex:
-        print(f"hidraw_gate: {action} {vidpid} failed: {ex}", file=sys.stderr)
+        print(f"hidraw_gate: {action} {node} failed: {ex}", file=sys.stderr)
 
 
 # ── Remapper thread ──────────────────────────────────────────────────────────
@@ -190,16 +215,23 @@ class Remapper(threading.Thread):
 # ── Controller instance ──────────────────────────────────────────────────────
 
 class ControllerInstance:
-    def __init__(self, path, name, vendor, product, family, mode):
+    def __init__(self, path, name, vendor, product, family, mode, uniq, hidraw):
         self.path    = path
         self.name    = name
         self.vendor  = vendor
         self.product = product
         self.family  = family
         self.mode    = mode
+        self.uniq    = uniq       # stable per-device id (BT MAC / serial)
+        self.hidraw  = hidraw     # /dev/hidrawN or None
         self._remap  = None
 
     def display_name(self):
+        # Disambiguate identical controllers (e.g. two DualSense) by a short
+        # tail of their unique id, so the tray shows which physical pad is which.
+        if self.uniq:
+            tail = self.uniq.replace(":", "")[-4:]
+            return f"{self.name} ({tail})"
         return self.name
 
     def _target_for_mode(self):
@@ -217,15 +249,15 @@ class ControllerInstance:
 
         target = self._target_for_mode()
         if target:
-            # Hide the physical pad's raw HID node from Wine/Proton before the
-            # remapper takes over (the evdev grab alone does not cover hidraw).
-            hidraw_gate("block", self.vendor, self.product)
+            # Hide this pad's raw HID node from Wine/Proton before the remapper
+            # takes over (the evdev grab alone does not cover hidraw).
+            hidraw_gate("block", self.hidraw)
             r = Remapper(self.path, target)
             r.start()
             self._remap = r
         else:
             # Native mode: make sure raw HID access is open again.
-            hidraw_gate("restore", self.vendor, self.product)
+            hidraw_gate("restore", self.hidraw)
 
     def virtual_path(self):
         return self._remap.virtual_path if self._remap else None
@@ -236,7 +268,7 @@ class ControllerInstance:
             self._remap = None
         # Restore raw HID access whenever we stop managing this pad
         # (disconnect or shutdown), so a blocked node never lingers.
-        hidraw_gate("restore", self.vendor, self.product)
+        hidraw_gate("restore", self.hidraw)
 
 
 # ── Controller Manager ───────────────────────────────────────────────────────
@@ -261,7 +293,7 @@ class ControllerManager:
         return paths
 
     def _scan(self):
-        """Return list of (path, name, vendor, product, family) for real controllers."""
+        """Return a list of dicts describing connected real controllers."""
         result = []
         virtual = self._virtual_paths()
         for path in evdev.list_devices():
@@ -273,17 +305,30 @@ class ControllerManager:
                 continue
             if dev.name in VIRTUAL_NAMES:
                 continue
-            key = (dev.info.vendor, dev.info.product)
-            if key in KNOWN_CONTROLLERS:
-                dname, family = KNOWN_CONTROLLERS[key]
-                if "Motion" not in dev.name and "Touchpad" not in dev.name:
-                    result.append((path, dname, dev.info.vendor,
-                                   dev.info.product, family))
+            family = VENDOR_FAMILY.get(dev.info.vendor)
+            if not family:
+                continue
+            # Must be an actual gamepad — excludes headset / motion-sensor /
+            # touchpad / consumer-control nodes that share the same vendor id.
+            keys = dev.capabilities().get(e.EV_KEY, [])
+            if e.BTN_GAMEPAD not in keys and e.BTN_SOUTH not in keys:
+                continue
+            name = CONTROLLER_NAMES.get(
+                (dev.info.vendor, dev.info.product), dev.name)
+            result.append({
+                "path":    path,
+                "name":    name,
+                "vendor":  dev.info.vendor,
+                "product": dev.info.product,
+                "family":  family,
+                "uniq":    dev.uniq or "",
+                "hidraw":  hidraw_for_event(path),
+            })
         return result
 
     def _monitor(self):
         while True:
-            found = {p: (n, v, pr, f) for p, n, v, pr, f in self._scan()}
+            found = {d["path"]: d for d in self._scan()}
             changed = False
             with self._lock:
                 # Remove disconnected
@@ -293,13 +338,14 @@ class ControllerManager:
                         del self._instances[path]
                         changed = True
                 # Add new
-                for path, (name, vendor, product, family) in found.items():
+                for path, d in found.items():
                     if path not in self._instances:
-                        cfg_key = f"{vendor:04x}:{product:04x}"
+                        cfg_key = d["uniq"] or f'{d["vendor"]:04x}:{d["product"]:04x}'
                         mode = self._config.get(
-                            cfg_key, DEFAULT_MODES.get(family, "ps5-native"))
+                            cfg_key, DEFAULT_MODES.get(d["family"], "ps5-native"))
                         inst = ControllerInstance(
-                            path, name, vendor, product, family, mode)
+                            d["path"], d["name"], d["vendor"], d["product"],
+                            d["family"], mode, d["uniq"], d["hidraw"])
                         inst.apply_mode()
                         self._instances[path] = inst
                         changed = True
@@ -318,7 +364,7 @@ class ControllerManager:
                 return
             inst.mode = mode
             inst.apply_mode()
-            cfg_key = f"{inst.vendor:04x}:{inst.product:04x}"
+            cfg_key = inst.uniq or f"{inst.vendor:04x}:{inst.product:04x}"
             self._config[cfg_key] = mode
         save_config(self._config)
         GLib.idle_add(self._on_change)

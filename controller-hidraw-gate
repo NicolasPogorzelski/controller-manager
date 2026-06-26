@@ -1,66 +1,49 @@
 #!/usr/bin/env bash
-# controller-hidraw-gate — block/restore raw HID access to a known game
-# controller, so Wine/Proton (winebus) and other userspace cannot read it via
-# /dev/hidraw* while controller-manager is remapping it to a virtual pad.
+# controller-hidraw-gate — block/restore raw HID access to a SINGLE game
+# controller's /dev/hidraw node, so Wine/Proton (winebus) and other userspace
+# cannot read the physical pad while controller-manager remaps it to a virtual
+# pad.
 #
-#   controller-hidraw-gate block|restore VID:PID
-#       VID:PID = 4 hex digits each, e.g. 054c:0ce6
+#   controller-hidraw-gate block|restore /dev/hidrawN
 #
-# Safety: only VID:PIDs on the built-in allowlist are accepted, and only
-# /dev/hidraw* nodes are ever chmod'd. Meant to be invoked through a
-# tightly-scoped NOPASSWD sudoers rule. Worst case an authorised caller can
-# toggle read access to their own controller's hidraw node — no privesc.
+# Operating on a specific node (rather than a VID:PID) lets two identical
+# controllers be gated independently.
+#
+# Safety: only /dev/hidraw* nodes are ever chmod'd, and only if the node
+# belongs to a HID device of a known gaming vendor — so this can't be aimed at
+# unrelated HID hardware (keyboards, fingerprint readers, …). Meant to be
+# invoked through a tightly-scoped NOPASSWD sudoers rule.
 
 set -euo pipefail
 
-# Known game controllers that have a hidraw node worth gating.
-ALLOW=(
-  054c:0ce6  # DualSense
-  054c:0df2  # DualSense Edge
-  054c:05c4  # DualShock 4 (v1)
-  054c:09cc  # DualShock 4 (v2)
-  045e:0b12  # Xbox Series X/S
-  045e:0b13  # Xbox Series X/S (BT)
-  045e:02ea  # Xbox One S
-  045e:02fd  # Xbox One S (BT)
-  045e:0b00  # Xbox Elite 2
-)
+# Gaming vendors whose hidraw nodes we are willing to gate (hex, upper-case):
+# Microsoft, Sony, Valve, Nintendo, 8BitDo, Hori.
+GAMING_VENDORS=( 045E 054C 28DE 057E 2DC8 0F0D )
 
 action="${1:-}"
-vidpid="${2:-}"
+node="${2:-}"
 
 case "$action" in
   block|restore) ;;
-  *) echo "usage: $(basename "$0") block|restore VID:PID" >&2; exit 2 ;;
+  *) echo "usage: $(basename "$0") block|restore /dev/hidrawN" >&2; exit 2 ;;
 esac
 
-[[ "$vidpid" =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$ ]] || { echo "bad VID:PID '$vidpid'" >&2; exit 2; }
-vidpid="${vidpid,,}"
+[[ "$node" =~ ^/dev/hidraw[0-9]+$ ]] || { echo "bad node '$node'" >&2; exit 2; }
+# Node already gone (e.g. controller unplugged) — nothing to do.
+[[ -e "$node" ]] || { echo "$node absent, nothing to do"; exit 0; }
 
-allowed=0
-for a in "${ALLOW[@]}"; do [[ "$a" == "$vidpid" ]] && allowed=1; done
-[[ $allowed -eq 1 ]] || { echo "VID:PID $vidpid not in allowlist" >&2; exit 3; }
+name="$(basename "$node")"
+ue="/sys/class/hidraw/$name/device/uevent"
+[[ -r "$ue" ]] || { echo "cannot read $ue" >&2; exit 3; }
 
-vid="${vidpid%%:*}"
-pid="${vidpid##*:}"
-# uevent HID_ID looks like: BUS:0000VVVV:0000PPPP (hex, upper-case)
-want="0000${vid^^}:0000${pid^^}"
+# HID_ID=BUS:0000VVVV:0000PPPP  ->  extract the 4-digit vendor.
+vid="$(sed -n 's/^HID_ID=[0-9A-Fa-f]*:0*\([0-9A-Fa-f]\{4\}\):.*/\1/p' "$ue" | tr 'a-f' 'A-F')"
+ok=0
+for v in "${GAMING_VENDORS[@]}"; do [[ "$v" == "$vid" ]] && ok=1; done
+[[ $ok -eq 1 ]] || { echo "vendor '$vid' of $node not a gaming vendor — refused" >&2; exit 3; }
 
 mode=000
 [[ "$action" == restore ]] && mode=666
-
-touched=0
-for h in /sys/class/hidraw/hidraw*; do
-  ue="$h/device/uevent"
-  [[ -r "$ue" ]] || continue
-  if grep -q "HID_ID=[0-9A-Fa-f]\{4\}:$want\$" "$ue"; then
-    node="/dev/$(basename "$h")"
-    if chmod "$mode" "$node"; then
-      echo "$action $node ($vidpid) -> $mode"
-      touched=$((touched + 1))
-    fi
-  fi
-done
-
-echo "controller-hidraw-gate: $action $vidpid touched $touched node(s)"
+chmod "$mode" "$node"
+echo "controller-hidraw-gate: $action $node (vendor $vid) -> $mode"
 exit 0
