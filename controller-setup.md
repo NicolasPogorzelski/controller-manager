@@ -9,7 +9,8 @@ Einheitliche, systemweite Controller-Verwaltung für alle Spiele (Steam und Lutr
 | PS5 DualSense | PS5 nativ | Kein Remapping, roher DualSense ans System |
 | PS5 DualSense | Als Xbox ausgeben | Virtueller Xbox 360 Pad via UInput |
 | Xbox Controller | Xbox nativ | Kein Remapping |
-| Xbox Controller | Als PS5 ausgeben | Virtueller DualSense via UInput |
+
+> Der Modus „Xbox → Als PS5 ausgeben" wird **nicht** angeboten — er funktioniert in Spielen nicht (siehe **Problem 4**). Die Übersetzungs-Infrastruktur bleibt im Code für eine spätere uhid-basierte Lösung.
 
 Mehrere Controller gleichzeitig werden unterstützt, jeder mit eigenem Modus.
 
@@ -94,6 +95,21 @@ admin ALL=(root) NOPASSWD: /usr/local/bin/controller-hidraw-gate
 > **Wichtig**: Die Sperre muss **vor** dem Spielstart aktiv sein. Hält ein Prozess das hidraw-fd schon offen (Spiel lief vor dem Moduswechsel), schließt der spätere `chmod` dieses fd nicht – Spiel neu starten.
 
 > **Hinweis xpad**: Xbox-Controller über den `xpad`-Treiber haben **keinen** hidraw-Knoten; dort macht das Gate korrekt nichts und der evdev-Grab allein genügt.
+
+---
+
+## Problem 4: „Als PS5 ausgeben" (xbox→ps5) funktioniert in Spielen nicht
+
+**Symptom**: Xbox One S BT auf „Als PS5 ausgeben" gestellt → im Spiel kommen nur **Achsen** an (Sticks + D-Pad als Achse), aber **keine Buttons** und kein Sony-GameController-Mapping. Native Modi und ps5→xbox (die Hauptrichtung) sind nicht betroffen.
+
+**Diagnose**: Die evdev-Übersetzung selbst ist korrekt — der Remapper hat eine Quirk-Tabelle für das nicht-standard evdev-Layout der Xbox One S BT (`045e:02e0`, alte Firmware) und erzeugt ein virtuelles uinput-Pad mit Sony-VID:PID (`054c:0ce6`). Ein roher evdev-Mitschnitt des virtuellen Knotens zeigt die Buttons als `EV_KEY` sauber anliegen. Sie erreichen das Spiel trotzdem nicht.
+
+**Ursache** (Spiegelbild von Problem 3): SDL/Proton erkennt ein Sony-Pad an der VID:PID und behandelt es über **HIDAPI**, d.h. es liest das Gerät direkt aus `/dev/hidraw*` statt über evdev — genau der Pfad, der bei Problem 3 das Leck war. Ein **virtuelles uinput-Pad hat aber gar keinen hidraw-Knoten**. SDL findet also kein HIDAPI-Backend für die vorgetäuschte PS5 und fällt auf das generische evdev-Joystick-Backend zurück, das nur Achsen, kein vollständiges GameController-Button-Mapping liefert. Bei ps5→xbox tritt das nicht auf, weil Xbox-Pads regulär über evdev/XInput (kein HIDAPI-Zwang) laufen.
+
+**Status — akzeptierte Limitierung, nicht weiter verfolgt**:
+- Die einzige naheliegende „Lösung" wäre `SDL_JOYSTICK_HIDAPI_PS5=0` (zwingt SDL auf das evdev-Backend für alle PS5-Pads). Das **verschlechtert aber den echten DualSense im Nativ-Modus** (verliert Touchpad/Rumble/HIDAPI-Features) und wird daher **bewusst nicht** gesetzt.
+- ps5→xbox (XInput-only-Spiele) ist der eigentliche Zweck des Projekts und funktioniert. xbox→ps5 ist ein Nischenfall.
+- Theoretisch behebbar nur durch ein virtuelles hidraw-Gerät (z.B. `uhid`), das ein vollständiges DualSense-HID-Descriptor + Reports emuliert — deutlich größerer Aufwand, derzeit nicht geplant.
 
 ---
 
@@ -216,7 +232,7 @@ Der wichtigste Fallstrick (→ Problem 3): `EVIOCGRAB` sperrt ausschließlich de
 - [x] PS5 nativ (kein Remapping)
 - [x] PS5 als Xbox ausgeben (Remapping + exklusiver Grab)
 - [x] Xbox nativ
-- [x] Xbox als PS5 ausgeben
+- [~] Xbox als PS5 ausgeben – Remap technisch korrekt, aber in Spielen unbrauchbar (nur Achsen, keine Buttons); akzeptierte Limitierung, siehe **Problem 4**
 - [x] Tray-Icon mit Menü (StatusNotifierItem + dbusmenu, kein AppIndicator3 nötig)
 - [x] Hotplug (Controller ein-/ausstecken, Menü aktualisiert automatisch)
 - [x] Persistente Modi-Konfiguration (`~/.config/controller-modes.json`)
@@ -284,7 +300,7 @@ MODE_LABELS = {
 
 MODES_FOR_FAMILY = {
     "ps5":  ["ps5-native",  "ps5-xbox"],
-    "xbox": ["xbox-native", "xbox-ps5"],
+    "xbox": ["xbox-native"],   # xbox-ps5 entfernt — unbrauchbar in Spielen (Problem 4)
 }
 
 VIRTUAL_XBOX = dict(

@@ -10,7 +10,8 @@ unabhängig vom Launcher.
 | PS5 DualSense | PS5 nativ | roher DualSense ans System |
 | PS5 DualSense | Als Xbox ausgeben | virtueller Xbox-360-Pad |
 | Xbox Controller | Xbox nativ | kein Remapping |
-| Xbox Controller | Als PS5 ausgeben | virtueller DualSense |
+
+(„Xbox → Als PS5 ausgeben" wird nicht angeboten — funktioniert in Spielen nicht, siehe `controller-setup.md` Problem 4.)
 
 ## Komponenten
 

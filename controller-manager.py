@@ -4,7 +4,7 @@ Controller Manager — unified tray + per-controller remapping.
 
 Supports:
   PS5 DualSense  →  nativ  |  als Xbox 360 ausgeben
-  Xbox Controller →  nativ  |  als PS5 ausgeben
+  Xbox Controller →  nativ  (xbox→ps5 unusable in games, see Problem 4)
 Multiple controllers simultaneously, each with its own mode.
 """
 
@@ -55,9 +55,15 @@ MODE_LABELS = {
     "xbox-ps5":    "Als PS5 ausgeben",
 }
 
+# Modes offered in the tray menu per family. "xbox-ps5" is intentionally NOT
+# listed: the evdev translation is correct, but SDL/Proton reads Sony VID:PIDs
+# via HIDAPI (hidraw) and a virtual uinput pad has no hidraw node, so only axes
+# (not buttons) reach games — unusable in practice. See controller-setup.md,
+# Problem 4. The translation infrastructure (VIRTUAL_PS5 / QUIRK_BUTTON_MAP /
+# _target_for_mode) is kept so a future uhid-based fix can re-enable it.
 MODES_FOR_FAMILY = {
     "ps5":  ["ps5-native",  "ps5-xbox"],
-    "xbox": ["xbox-native", "xbox-ps5"],
+    "xbox": ["xbox-native"],
 }
 
 VIRTUAL_XBOX = dict(
@@ -371,8 +377,14 @@ class ControllerManager:
                 for path, d in found.items():
                     if path not in self._instances:
                         cfg_key = d["uniq"] or f'{d["vendor"]:04x}:{d["product"]:04x}'
-                        mode = self._config.get(
-                            cfg_key, DEFAULT_MODES.get(d["family"], "ps5-native"))
+                        default = DEFAULT_MODES.get(d["family"], "ps5-native")
+                        mode = self._config.get(cfg_key, default)
+                        # Drop modes no longer offered for this family (e.g. a
+                        # stored "xbox-ps5" from before it was removed): fall
+                        # back to the native default instead of silently
+                        # applying an unselectable mode.
+                        if mode not in MODES_FOR_FAMILY.get(d["family"], []):
+                            mode = default
                         inst = ControllerInstance(
                             d["path"], d["name"], d["vendor"], d["product"],
                             d["family"], mode, d["uniq"], d["hidraw"])
