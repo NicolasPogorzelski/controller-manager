@@ -436,9 +436,10 @@ class ControllerManager:
 
 class DbusmenuServer(dbus.service.Object):
 
-    def __init__(self, bus, path, manager):
+    def __init__(self, bus, path, manager, on_quit):
         dbus.service.Object.__init__(self, bus, path)
         self._mgr      = manager
+        self._on_quit  = on_quit
         self._revision = 1
 
     # ── menu building ────────────────────────────────────────────────────────
@@ -537,7 +538,7 @@ class DbusmenuServer(dbus.service.Object):
         if eventId != "clicked":
             return
         if id_ == QUIT_ID:
-            GLib.idle_add(lambda: (os._exit(0), False)[1])
+            GLib.idle_add(lambda: (self._on_quit(), False)[1])
             return
         lookup = self._build_lookup()
         if id_ in lookup:
@@ -675,7 +676,12 @@ def main():
             tray_ref[0].refresh()
 
     mgr  = ControllerManager(on_change)
-    menu = DbusmenuServer(bus, MENU_PATH, mgr)
+
+    def _shutdown_and_quit():
+        mgr.stop_all()
+        loop.quit()
+
+    menu = DbusmenuServer(bus, MENU_PATH, mgr, _shutdown_and_quit)
     tray = TrayIcon(bus, mgr, menu)
     tray_ref[0] = tray
 

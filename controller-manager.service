@@ -5,7 +5,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=python3 /home/admin/.local/bin/controller-manager.py
+ExecStart=python3 %h/.local/bin/controller-manager.py
 Restart=on-failure
 RestartSec=5
 
