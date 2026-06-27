@@ -36,7 +36,7 @@ action the daemon needs: gating raw HID device nodes.
 seconds. A device is treated as a controller when:
 
 1. its **vendor id** is known (`0x054c` → PlayStation, `0x045e` → Xbox), and
-2. it advertises a **gamepad capability** (`BTN_GAMEPAD` / `BTN_SOUTH`).
+2. it advertises a **gamepad capability** — either `BTN_GAMEPAD` or `BTN_SOUTH` (whichever the driver exposes).
 
 Recognising by vendor plus capability — rather than a fixed product-ID list — means
 unlisted models of a known vendor still work, and non-gamepad nodes that share a vendor id
