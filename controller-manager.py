@@ -294,7 +294,9 @@ class ControllerInstance:
     def apply_mode(self):
         """Stop existing remapper, start new one if needed."""
         if self._remap:
-            self._remap.stop()
+            old = self._remap
+            old.stop()
+            old.join(timeout=1.0)   # wait for ungrab before the new grab attempt
             self._remap = None
 
         target = self._target_for_mode()
