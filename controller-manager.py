@@ -285,6 +285,7 @@ class ControllerInstance:
         self.bustype = bustype
         self._remap      = None
         self._hidraw_fd  = None   # kept open for LED output reports
+        self._out_seq    = 0      # BT output report sequence (high nibble of seq_tag)
         self._open_hidraw_fd()    # open before any gate may chmod it to 000
 
     def display_name(self):
@@ -324,30 +325,34 @@ class ControllerInstance:
             print(f"led: write failed: {ex}", file=sys.stderr)
 
     def _write_led_bt(self, r, g, b):
-        # BT output report 0x31 — 78 bytes.
-        # common struct starts at byte 2 (after report_id + seq_tag).
-        # Byte offsets: valid_flag2=40, lightbar R/G/B=45/46/47, CRC32=74..77.
+        # BT output report 0x31 — 78 bytes. Layout per Linux hid-playstation.c:
+        #   [0] report_id, [1] seq_tag, [2] tag (0x10 — required, else ignored),
+        #   [3..] common report, [74:78] little-endian CRC32.
+        # Common offsets: valid_flag1=1, lightbar R/G/B=44/45/46
+        #   → absolute valid_flag1=4, R/G/B=47/48/49.
         buf = bytearray(78)
-        buf[0]  = 0x31          # report ID
-        buf[1]  = 0x02          # seq_tag
-        buf[40] = 0x04          # valid_flag2: LIGHTBAR_CONTROL_ENABLE (BIT 2)
-        buf[45] = r
-        buf[46] = g
-        buf[47] = b
+        buf[0]  = 0x31                       # report ID
+        buf[1]  = (self._out_seq << 4) & 0xFF  # seq in high nibble (avoids dedup)
+        buf[2]  = 0x10                       # DS_OUTPUT_TAG — mandatory or no-op
+        buf[4]  = 0x04                       # valid_flag1: LIGHTBAR_CONTROL_ENABLE (BIT 2)
+        buf[47] = r
+        buf[48] = g
+        buf[49] = b
         crc = zlib.crc32(b'\xa2' + bytes(buf[:74])) & 0xFFFFFFFF
         buf[74:78] = crc.to_bytes(4, 'little')
         self._hidraw_fd.write(bytes(buf))
+        self._out_seq = (self._out_seq + 1) % 16
 
     def _write_led_usb(self, r, g, b):
-        # USB output report 0x02 — 48 bytes.
-        # common struct starts at byte 1 (after report_id).
-        # Byte offsets: valid_flag2=39, lightbar R/G/B=44/45/46.
+        # USB output report 0x02 — 48 bytes. Common starts at byte 1 (after
+        # report_id); no CRC. Common offsets: valid_flag1=1, lightbar R/G/B=44/45/46
+        #   → absolute valid_flag1=2, R/G/B=45/46/47.
         buf = bytearray(48)
         buf[0]  = 0x02          # report ID
-        buf[39] = 0x04          # valid_flag2: LIGHTBAR_CONTROL_ENABLE (BIT 2)
-        buf[44] = r
-        buf[45] = g
-        buf[46] = b
+        buf[2]  = 0x04          # valid_flag1: LIGHTBAR_CONTROL_ENABLE (BIT 2)
+        buf[45] = r
+        buf[46] = g
+        buf[47] = b
         self._hidraw_fd.write(bytes(buf))
 
     # ── mode / lifecycle ──────────────────────────────────────────────────────
