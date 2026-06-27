@@ -411,6 +411,12 @@ class ControllerManager:
         self._monitor_th = threading.Thread(target=self._monitor, daemon=True)
 
     def start(self):
+        # Populate instances synchronously so the first menu we publish already
+        # reflects connected controllers. Registering an empty menu and mutating
+        # it afterwards makes the host recycle item ids across a structural change
+        # (separator→radio, header relabel), which leaves entries stuck disabled.
+        # Then run the periodic monitor for hotplug.
+        self._poll()
         self._monitor_th.start()
 
     def _virtual_paths(self):
@@ -459,38 +465,43 @@ class ControllerManager:
                 dev.close()
         return result
 
+    def _poll(self):
+        """One scan/reconcile pass; returns True if the instance set changed."""
+        found = {d["path"]: d for d in self._scan()}
+        changed = False
+        with self._lock:
+            # Remove disconnected
+            for path in list(self._instances):
+                if path not in found:
+                    self._instances[path].stop()
+                    del self._instances[path]
+                    changed = True
+            # Add new
+            for path, d in found.items():
+                if path not in self._instances:
+                    cfg_key = d["uniq"] or f'{d["vendor"]:04x}:{d["product"]:04x}'
+                    default = DEFAULT_MODES.get(d["family"], "ps5-native")
+                    mode = self._config.get(cfg_key, default)
+                    # Drop modes no longer offered for this family (e.g. a
+                    # stored "xbox-ps5" from before it was removed): fall
+                    # back to the native default instead of silently
+                    # applying an unselectable mode.
+                    if mode not in MODES_FOR_FAMILY.get(d["family"], []):
+                        mode = default
+                    inst = ControllerInstance(
+                        d["path"], d["name"], d["vendor"], d["product"],
+                        d["family"], mode, d["uniq"], d["hidraw"], d["bustype"])
+                    inst.apply_mode()
+                    self._instances[path] = inst
+                    changed = True
+        if changed:
+            GLib.idle_add(self._on_change)
+        return changed
+
     def _monitor(self):
         while True:
-            found = {d["path"]: d for d in self._scan()}
-            changed = False
-            with self._lock:
-                # Remove disconnected
-                for path in list(self._instances):
-                    if path not in found:
-                        self._instances[path].stop()
-                        del self._instances[path]
-                        changed = True
-                # Add new
-                for path, d in found.items():
-                    if path not in self._instances:
-                        cfg_key = d["uniq"] or f'{d["vendor"]:04x}:{d["product"]:04x}'
-                        default = DEFAULT_MODES.get(d["family"], "ps5-native")
-                        mode = self._config.get(cfg_key, default)
-                        # Drop modes no longer offered for this family (e.g. a
-                        # stored "xbox-ps5" from before it was removed): fall
-                        # back to the native default instead of silently
-                        # applying an unselectable mode.
-                        if mode not in MODES_FOR_FAMILY.get(d["family"], []):
-                            mode = default
-                        inst = ControllerInstance(
-                            d["path"], d["name"], d["vendor"], d["product"],
-                            d["family"], mode, d["uniq"], d["hidraw"], d["bustype"])
-                        inst.apply_mode()
-                        self._instances[path] = inst
-                        changed = True
-            if changed:
-                GLib.idle_add(self._on_change)
             time.sleep(2)
+            self._poll()
 
     def get_instances(self):
         with self._lock:
@@ -783,7 +794,12 @@ class TrayIcon(dbus.service.Object):
 def main():
     loop = GLib.MainLoop()
     bus  = dbus.SessionBus()
-    dbus.service.BusName(BUS_NAME, bus)
+    # Own the conventional StatusNotifierItem well-known name, held for the
+    # process lifetime (an unreferenced BusName would be garbage-collected and
+    # the name released). Registration itself goes by object path rather than
+    # this name (see register_with_watcher); owning it just gives a stable,
+    # spec-conventional identity for hosts that look items up by name.
+    bus_name = dbus.service.BusName(BUS_NAME, bus)
 
     tray_ref = [None]
 
@@ -801,16 +817,49 @@ def main():
     tray = TrayIcon(bus, mgr, menu)
     tray_ref[0] = tray
 
-    try:
-        watcher = bus.get_object("org.kde.StatusNotifierWatcher",
-                                  "/StatusNotifierWatcher")
-        watcher.RegisterStatusNotifierItem(
-            ITEM_PATH, dbus_interface="org.kde.StatusNotifierWatcher")
-    except Exception as ex:
-        print(f"controller-manager: watcher registration failed: {ex}",
-              file=sys.stderr)
+    watcher_name = "org.kde.StatusNotifierWatcher"
 
+    def register_with_watcher():
+        try:
+            watcher = bus.get_object(watcher_name, "/StatusNotifierWatcher")
+            # Register by object path, not by our well-known bus name. The host
+            # keys the item on the registration argument: a well-known name is
+            # stable across restarts, so a fresh process collides with the dying
+            # previous indicator (which the host only tears down ~500ms after our
+            # old connection drops) and the registration is silently swallowed.
+            # The path form keys on our *unique* connection name instead, so each
+            # run is distinct and the stale indicator cleans itself up.
+            watcher.RegisterStatusNotifierItem(
+                ITEM_PATH, dbus_interface=watcher_name)
+        except Exception as ex:
+            print(f"controller-manager: watcher registration failed: {ex}",
+                  file=sys.stderr)
+
+    # Populate controllers BEFORE announcing ourselves, so the first menu the
+    # host reads is already complete (see ControllerManager.start).
     mgr.start()
+
+    # Register exactly once per watcher lifetime, driven by watch_name_owner.
+    # Two points matter:
+    #   * It must run inside the main loop (watch_name_owner delivers the current
+    #     owner asynchronously, i.e. once loop.run() is servicing requests), so we
+    #     can answer the watcher's verification call-back — registering before the
+    #     loop races and the entry silently never appears.
+    #   * It must NOT register twice for the same owner: a duplicate
+    #     RegisterStatusNotifierItem makes the host reset the indicator, which
+    #     briefly drops its name owner and destroys it ~500ms later (icon flaps in
+    #     then vanishes). The guard re-registers only after a real disappear /
+    #     reappear of the watcher (login race, shell replacement).
+    watcher_registered = [False]
+
+    def _on_watcher_owner(owner):
+        if owner and not watcher_registered[0]:
+            watcher_registered[0] = True
+            register_with_watcher()
+        elif not owner:
+            watcher_registered[0] = False
+
+    bus.watch_name_owner(watcher_name, _on_watcher_owner)
 
     def _shutdown(*_):
         mgr.stop_all()
