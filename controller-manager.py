@@ -541,21 +541,24 @@ class DbusmenuServer(dbus.service.Object):
             return inst.name
         return f"{inst.name} {peers.index(inst) + 1}"
 
-    def _build_items(self):
-        """Flat menu: header + radio items per controller, then Quit."""
+    def _item_props(self):
+        """Single source of truth for the menu: ordered list of (id, props).
+        Used by GetLayout, GetGroupProperties and GetProperty so a host can
+        never see a different id→props mapping depending on which call it uses
+        (a mismatch desyncs the host's menu model and misroutes clicks)."""
         items  = []
         id_    = 1
         instances = self._mgr.get_instances()
 
         if not instances:
-            items.append(self._make_item(id_, {
+            items.append((id_, {
                 "label":   dbus.String("No controller connected"),
                 "enabled": dbus.Boolean(False),
             }))
             id_ += 1
         else:
             for inst in instances:
-                items.append(self._make_item(id_, {
+                items.append((id_, {
                     "label":   dbus.String(self._inst_label(inst, instances)),
                     "enabled": dbus.Boolean(False),
                 }))
@@ -563,7 +566,7 @@ class DbusmenuServer(dbus.service.Object):
 
                 modes = MODES_FOR_FAMILY.get(inst.family, [])
                 for mode in modes:
-                    items.append(self._make_item(id_, {
+                    items.append((id_, {
                         "label":        dbus.String(MODE_LABELS[mode]),
                         "enabled":      dbus.Boolean(True),
                         "toggle-type":  dbus.String("radio"),
@@ -572,14 +575,18 @@ class DbusmenuServer(dbus.service.Object):
                     id_ += 1
 
                 if inst is not instances[-1]:
-                    items.append(self._make_item(id_, {"type": dbus.String("separator")}))
+                    items.append((id_, {"type": dbus.String("separator")}))
                     id_ += 1
 
         # Final separator + Quit
-        items.append(self._make_item(id_, {"type": dbus.String("separator")}))
-        items.append(self._make_item(QUIT_ID, {"label": dbus.String("Quit"),
-                                                "enabled": dbus.Boolean(True)}))
+        items.append((id_, {"type": dbus.String("separator")}))
+        items.append((QUIT_ID, {"label": dbus.String("Quit"),
+                                "enabled": dbus.Boolean(True)}))
         return items
+
+    def _build_items(self):
+        """Flat menu: header + radio items per controller, then Quit."""
+        return [self._make_item(id_, props) for id_, props in self._item_props()]
 
     def _build_lookup(self):
         """id → (controller_path, mode) for click handling."""
@@ -618,11 +625,25 @@ class DbusmenuServer(dbus.service.Object):
     @dbus.service.method("com.canonical.dbusmenu",
                          in_signature="aias", out_signature="a(ia{sv})")
     def GetGroupProperties(self, ids, propertyNames):
-        return dbus.Array([], signature="(ia{sv})")
+        want  = {int(i) for i in ids}            # empty → all items, per spec
+        names = {str(n) for n in propertyNames}  # empty → all properties
+        result = []
+        for id_, props in self._item_props():
+            if want and id_ not in want:
+                continue
+            if names:
+                props = {k: v for k, v in props.items() if k in names}
+            result.append(dbus.Struct(
+                [dbus.Int32(id_), dbus.Dictionary(props, signature="sv")],
+                signature="(ia{sv})"))
+        return dbus.Array(result, signature="(ia{sv})")
 
     @dbus.service.method("com.canonical.dbusmenu",
                          in_signature="is", out_signature="v")
     def GetProperty(self, id_, name):
+        for iid, props in self._item_props():
+            if iid == int(id_) and str(name) in props:
+                return props[str(name)]
         return dbus.String("")
 
     @dbus.service.method("com.canonical.dbusmenu",
