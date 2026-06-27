@@ -50,10 +50,10 @@ DEFAULT_MODES = {
 }
 
 MODE_LABELS = {
-    "ps5-native":  "PS5 native",
-    "ps5-xbox":    "Output as Xbox",
-    "xbox-native": "Xbox native",
-    "xbox-ps5":    "Output as PS5",
+    "ps5-native":  "DualSense mode",
+    "ps5-xbox":    "Emulate Xbox",
+    "xbox-native": "Xbox mode",
+    "xbox-ps5":    "Emulate PS5",
 }
 
 # Modes offered in the tray menu per family. "xbox-ps5" is intentionally NOT
@@ -278,11 +278,6 @@ class ControllerInstance:
         self._remap  = None
 
     def display_name(self):
-        # Disambiguate identical controllers (e.g. two DualSense) by a short
-        # tail of their unique id, so the tray shows which physical pad is which.
-        if self.uniq:
-            tail = self.uniq.replace(":", "")[-4:]
-            return f"{self.name} ({tail})"
         return self.name
 
     def _target_for_mode(self):
@@ -458,35 +453,46 @@ class DbusmenuServer(dbus.service.Object):
             signature="(ia{sv}av)"
         )
 
+    def _inst_label(self, inst, instances):
+        """'DualSense' for a unique model; 'DualSense 1 / 2' when duplicates exist."""
+        peers = [i for i in instances if i.name == inst.name]
+        if len(peers) == 1:
+            return inst.name
+        return f"{inst.name} {peers.index(inst) + 1}"
+
     def _build_items(self):
         """Flat menu: header + radio items per controller, then Quit."""
         items  = []
         id_    = 1
         instances = self._mgr.get_instances()
 
-        for inst in instances:
-            # Section header (disabled label)
+        if not instances:
             items.append(self._make_item(id_, {
-                "label":   dbus.String(inst.display_name()),
+                "label":   dbus.String("No controller connected"),
                 "enabled": dbus.Boolean(False),
             }))
             id_ += 1
-
-            modes = MODES_FOR_FAMILY.get(inst.family, [])
-            for mode in modes:
+        else:
+            for inst in instances:
                 items.append(self._make_item(id_, {
-                    "label":        dbus.String(MODE_LABELS[mode]),
-                    "enabled":      dbus.Boolean(True),
-                    "toggle-type":  dbus.String("radio"),
-                    "toggle-state": dbus.Int32(1 if inst.mode == mode else 0),
-                    # encode controller path + mode in id via lookup below
+                    "label":   dbus.String(self._inst_label(inst, instances)),
+                    "enabled": dbus.Boolean(False),
                 }))
                 id_ += 1
 
-            # Separator between controllers
-            if inst is not instances[-1]:
-                items.append(self._make_item(id_, {"type": dbus.String("separator")}))
-                id_ += 1
+                modes = MODES_FOR_FAMILY.get(inst.family, [])
+                for mode in modes:
+                    items.append(self._make_item(id_, {
+                        "label":        dbus.String(MODE_LABELS[mode]),
+                        "enabled":      dbus.Boolean(True),
+                        "toggle-type":  dbus.String("radio"),
+                        "toggle-state": dbus.Int32(1 if inst.mode == mode else 0),
+                    }))
+                    id_ += 1
+
+                if inst is not instances[-1]:
+                    items.append(self._make_item(id_, {"type": dbus.String("separator")}))
+                    id_ += 1
 
         # Final separator + Quit
         items.append(self._make_item(id_, {"type": dbus.String("separator")}))
@@ -607,12 +613,14 @@ class TrayIcon(dbus.service.Object):
                          if i.mode not in ("ps5-native", "xbox-native")]
         if active_remaps:
             icon  = "input-gaming"
-            title = f"Controller ({len(active_remaps)} remapped)"
         else:
             icon  = "input-gaming-symbolic"
-            title = "Controller (all native)"
-        n = len(instances)
-        tip = f"{n} controller(s) connected" if n else "No controller"
+        title = "Controller Manager"
+        if instances:
+            tip = "\n".join(
+                f"{inst.name} — {MODE_LABELS[inst.mode]}" for inst in instances)
+        else:
+            tip = "No controller connected"
 
         return {
             "Category":      dbus.String("Hardware"),
