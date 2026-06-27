@@ -357,27 +357,30 @@ class ControllerManager:
                 dev = evdev.InputDevice(path)
             except Exception:
                 continue
-            if dev.name in VIRTUAL_NAMES:
-                continue
-            family = VENDOR_FAMILY.get(dev.info.vendor)
-            if not family:
-                continue
-            # Must be an actual gamepad — excludes headset / motion-sensor /
-            # touchpad / consumer-control nodes that share the same vendor id.
-            keys = dev.capabilities().get(e.EV_KEY, [])
-            if e.BTN_GAMEPAD not in keys and e.BTN_SOUTH not in keys:
-                continue
-            name = CONTROLLER_NAMES.get(
-                (dev.info.vendor, dev.info.product), dev.name)
-            result.append({
-                "path":    path,
-                "name":    name,
-                "vendor":  dev.info.vendor,
-                "product": dev.info.product,
-                "family":  family,
-                "uniq":    dev.uniq or "",
-                "hidraw":  hidraw_for_event(path),
-            })
+            try:
+                if dev.name in VIRTUAL_NAMES:
+                    continue
+                family = VENDOR_FAMILY.get(dev.info.vendor)
+                if not family:
+                    continue
+                # Must be an actual gamepad — excludes headset / motion-sensor /
+                # touchpad / consumer-control nodes that share the same vendor id.
+                keys = dev.capabilities().get(e.EV_KEY, [])
+                if e.BTN_GAMEPAD not in keys and e.BTN_SOUTH not in keys:
+                    continue
+                name = CONTROLLER_NAMES.get(
+                    (dev.info.vendor, dev.info.product), dev.name)
+                result.append({
+                    "path":    path,
+                    "name":    name,
+                    "vendor":  dev.info.vendor,
+                    "product": dev.info.product,
+                    "family":  family,
+                    "uniq":    dev.uniq or "",
+                    "hidraw":  hidraw_for_event(path),
+                })
+            finally:
+                dev.close()
         return result
 
     def _monitor(self):
