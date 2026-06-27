@@ -9,7 +9,7 @@ Supports:
 Multiple controllers simultaneously, each with its own mode.
 """
 
-import os, sys, json, signal, threading, time, subprocess, glob, selectors
+import os, sys, json, signal, threading, time, subprocess, glob, selectors, zlib
 import evdev
 from evdev import UInput, ecodes as e
 import dbus, dbus.service, dbus.mainloop.glib
@@ -47,6 +47,13 @@ CONTROLLER_NAMES = {
 DEFAULT_MODES = {
     "ps5":  "ps5-native",
     "xbox": "xbox-native",
+}
+
+# Lightbar colors per ps5 mode (R, G, B 0-255).
+# Only DualSense-family controllers have a lightbar; Xbox is always skipped.
+MODE_LED = {
+    "ps5-native": (0,   0, 255),   # blue  — native PlayStation feel
+    "ps5-xbox":   (0, 128,   0),   # green — signals active Xbox emulation
 }
 
 MODE_LABELS = {
@@ -266,7 +273,7 @@ class Remapper(threading.Thread):
 # ── Controller instance ──────────────────────────────────────────────────────
 
 class ControllerInstance:
-    def __init__(self, path, name, vendor, product, family, mode, uniq, hidraw):
+    def __init__(self, path, name, vendor, product, family, mode, uniq, hidraw, bustype):
         self.path    = path
         self.name    = name
         self.vendor  = vendor
@@ -275,10 +282,75 @@ class ControllerInstance:
         self.mode    = mode
         self.uniq    = uniq       # stable per-device id (BT MAC / serial)
         self.hidraw  = hidraw     # list of /dev/hidrawN (may be empty)
-        self._remap  = None
+        self.bustype = bustype
+        self._remap      = None
+        self._hidraw_fd  = None   # kept open for LED output reports
+        self._open_hidraw_fd()    # open before any gate may chmod it to 000
 
     def display_name(self):
         return self.name
+
+    # ── LED lightbar ─────────────────────────────────────────────────────────
+
+    def _open_hidraw_fd(self):
+        """Open the hidraw node for HID output reports (LED). PS5 only."""
+        if not self.hidraw or self.family != "ps5":
+            return
+        node = self.hidraw[0]
+        try:
+            self._hidraw_fd = open(node, "r+b", buffering=0)
+        except Exception as ex:
+            print(f"led: cannot open {node}: {ex}", file=sys.stderr)
+
+    def _close_hidraw_fd(self):
+        if self._hidraw_fd:
+            try:
+                self._hidraw_fd.close()
+            except Exception:
+                pass
+            self._hidraw_fd = None
+
+    def _apply_led(self):
+        """Write the lightbar color for the current mode. No-op for Xbox."""
+        if not self._hidraw_fd or self.family != "ps5":
+            return
+        r, g, b = MODE_LED.get(self.mode, (0, 0, 0))
+        try:
+            if self.bustype == e.BUS_BLUETOOTH:
+                self._write_led_bt(r, g, b)
+            else:
+                self._write_led_usb(r, g, b)
+        except Exception as ex:
+            print(f"led: write failed: {ex}", file=sys.stderr)
+
+    def _write_led_bt(self, r, g, b):
+        # BT output report 0x31 — 78 bytes.
+        # common struct starts at byte 2 (after report_id + seq_tag).
+        # Byte offsets: valid_flag2=40, lightbar R/G/B=45/46/47, CRC32=74..77.
+        buf = bytearray(78)
+        buf[0]  = 0x31          # report ID
+        buf[1]  = 0x02          # seq_tag
+        buf[40] = 0x04          # valid_flag2: LIGHTBAR_CONTROL_ENABLE (BIT 2)
+        buf[45] = r
+        buf[46] = g
+        buf[47] = b
+        crc = zlib.crc32(b'\xa2' + bytes(buf[:74])) & 0xFFFFFFFF
+        buf[74:78] = crc.to_bytes(4, 'little')
+        self._hidraw_fd.write(bytes(buf))
+
+    def _write_led_usb(self, r, g, b):
+        # USB output report 0x02 — 48 bytes.
+        # common struct starts at byte 1 (after report_id).
+        # Byte offsets: valid_flag2=39, lightbar R/G/B=44/45/46.
+        buf = bytearray(48)
+        buf[0]  = 0x02          # report ID
+        buf[39] = 0x04          # valid_flag2: LIGHTBAR_CONTROL_ENABLE (BIT 2)
+        buf[44] = r
+        buf[45] = g
+        buf[46] = b
+        self._hidraw_fd.write(bytes(buf))
+
+    # ── mode / lifecycle ──────────────────────────────────────────────────────
 
     def _target_for_mode(self):
         if self.mode == "ps5-xbox":
@@ -288,7 +360,7 @@ class ControllerInstance:
         return None
 
     def apply_mode(self):
-        """Stop existing remapper, start new one if needed."""
+        """Stop existing remapper, start new one if needed, update LED."""
         if self._remap:
             old = self._remap
             old.stop()
@@ -308,6 +380,8 @@ class ControllerInstance:
             # Native mode: make sure raw HID access is open again.
             hidraw_gate("restore", self.hidraw)
 
+        self._apply_led()
+
     def virtual_path(self):
         return self._remap.virtual_path if self._remap else None
 
@@ -318,6 +392,7 @@ class ControllerInstance:
         # Restore raw HID access whenever we stop managing this pad
         # (disconnect or shutdown), so a blocked node never lingers.
         hidraw_gate("restore", self.hidraw)
+        self._close_hidraw_fd()
 
 
 # ── Controller Manager ───────────────────────────────────────────────────────
@@ -373,6 +448,7 @@ class ControllerManager:
                     "family":  family,
                     "uniq":    dev.uniq or "",
                     "hidraw":  hidraw_for_event(path),
+                    "bustype": dev.info.bustype,
                 })
             finally:
                 dev.close()
@@ -403,7 +479,7 @@ class ControllerManager:
                             mode = default
                         inst = ControllerInstance(
                             d["path"], d["name"], d["vendor"], d["product"],
-                            d["family"], mode, d["uniq"], d["hidraw"])
+                            d["family"], mode, d["uniq"], d["hidraw"], d["bustype"])
                         inst.apply_mode()
                         self._instances[path] = inst
                         changed = True
