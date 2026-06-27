@@ -81,6 +81,27 @@ if ! python3 -m py_compile "${REPO_ROOT}/controller-manager.py" 2>/dev/null; the
 fi
 
 # =============================================================================
+# Check 6: shell scripts (shellcheck, if available)
+# =============================================================================
+echo "Check 6: shell scripts (shellcheck)"
+
+if command -v shellcheck &>/dev/null; then
+    SHELL_FILES=()
+    while IFS= read -r f; do SHELL_FILES+=("$f"); done < \
+        <(find "${REPO_ROOT}" -not -path "*/.git/*" -name "*.sh" -type f | sort)
+    SHELL_FILES+=("${REPO_ROOT}/controller-hidraw-gate")
+
+    for f in "${SHELL_FILES[@]}"; do
+        if ! shellcheck "$f" 2>/dev/null; then
+            echo "  shellcheck failed: $(basename "$f")"
+            echo "x" >> "${ERROR_LOG}"
+        fi
+    done
+else
+    echo "  (shellcheck not found — skipped; CI enforces it)"
+fi
+
+# =============================================================================
 # Result
 # =============================================================================
 ERRORS=$((ERRORS + $(wc -l < "${ERROR_LOG}")))
