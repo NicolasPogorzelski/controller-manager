@@ -138,28 +138,29 @@ def save_config(cfg):
 GATE_BIN = "/usr/local/bin/controller-hidraw-gate"
 
 def hidraw_for_event(ev_path):
-    """Return /dev/hidrawN belonging to the same HID device as an evdev node,
-    or None (e.g. xpad Xbox pads expose no hidraw)."""
+    """Return all /dev/hidrawN nodes for the HID device behind an evdev node.
+    Returns an empty list when the device exposes no hidraw (e.g. xpad)."""
     base = f"/sys/class/input/{os.path.basename(ev_path)}/device"
     if not os.path.exists(base):
-        return None
+        return []
     hid_dir = os.path.realpath(os.path.join(base, "..", ".."))
     nodes = glob.glob(os.path.join(hid_dir, "hidraw", "hidraw*"))
-    return f"/dev/{os.path.basename(nodes[0])}" if nodes else None
+    return sorted(f"/dev/{os.path.basename(n)}" for n in nodes)
 
-def hidraw_gate(action, node):
-    """action: 'block' | 'restore'; node: /dev/hidrawN or None.
-    No-op if there is no hidraw node, or the helper/sudo rule is missing."""
-    if not node or not os.path.exists(GATE_BIN):
+def hidraw_gate(action, nodes):
+    """action: 'block' | 'restore'; nodes: list of /dev/hidrawN.
+    No-op for an empty list or when the helper/sudo rule is missing."""
+    if not nodes or not os.path.exists(GATE_BIN):
         return
-    try:
-        subprocess.run(
-            ["sudo", "-n", GATE_BIN, action, node],
-            timeout=5, check=False,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except Exception as ex:
-        print(f"hidraw_gate: {action} {node} failed: {ex}", file=sys.stderr)
+    for node in nodes:
+        try:
+            subprocess.run(
+                ["sudo", "-n", GATE_BIN, action, node],
+                timeout=5, check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception as ex:
+            print(f"hidraw_gate: {action} {node} failed: {ex}", file=sys.stderr)
 
 
 # ── Remapper thread ──────────────────────────────────────────────────────────
@@ -273,7 +274,7 @@ class ControllerInstance:
         self.family  = family
         self.mode    = mode
         self.uniq    = uniq       # stable per-device id (BT MAC / serial)
-        self.hidraw  = hidraw     # /dev/hidrawN or None
+        self.hidraw  = hidraw     # list of /dev/hidrawN (may be empty)
         self._remap  = None
 
     def display_name(self):
