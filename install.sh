@@ -10,8 +10,9 @@ echo "==> User-space (controller-manager + service)"
 install -D -m 0755 controller-manager.py       "$HOME/.local/bin/controller-manager.py"
 install -D -m 0644 controller-manager.service  "$HOME/.config/systemd/user/controller-manager.service"
 
-echo "==> Root-space (hidraw gate + sudoers) — sudo required"
+echo "==> Root-space (hidraw gate + led helper + sudoers) — sudo required"
 sudo install -m 0755 -o root -g root controller-hidraw-gate /usr/local/bin/controller-hidraw-gate
+sudo install -m 0755 -o root -g root controller-led         /usr/local/bin/controller-led
 
 # Render the sudoers rule for the installing user, validate it in isolation,
 # then install it. Validating before placement avoids leaving a broken file in

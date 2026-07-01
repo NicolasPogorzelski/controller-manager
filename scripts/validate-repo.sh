@@ -90,6 +90,7 @@ if command -v shellcheck &>/dev/null; then
     while IFS= read -r f; do SHELL_FILES+=("$f"); done < \
         <(find "${REPO_ROOT}" -not -path "*/.git/*" -name "*.sh" -type f | sort)
     SHELL_FILES+=("${REPO_ROOT}/controller-hidraw-gate")
+    SHELL_FILES+=("${REPO_ROOT}/controller-led")
 
     for f in "${SHELL_FILES[@]}"; do
         if ! shellcheck "$f" 2>/dev/null; then
@@ -99,6 +100,18 @@ if command -v shellcheck &>/dev/null; then
     done
 else
     echo "  (shellcheck not found — skipped; CI enforces it)"
+fi
+
+# =============================================================================
+# Check 7: reconcile logic unit test (identity keying / rebind / grace)
+# =============================================================================
+echo "Check 7: reconcile unit test"
+
+if [[ -f "${REPO_ROOT}/tests/test_reconcile.py" ]]; then
+    if ! python3 "${REPO_ROOT}/tests/test_reconcile.py" >/dev/null 2>&1; then
+        echo "  tests/test_reconcile.py: FAILED"
+        echo "x" >> "${ERROR_LOG}"
+    fi
 fi
 
 # =============================================================================

@@ -1,7 +1,9 @@
-# Allow controller-manager (running as the installing user) to gate raw HID
-# access to remapped controllers without a password. Scoped to the single
-# root-owned helper; the helper only ever chmods /dev/hidraw* nodes of
-# allowlisted controllers.
+# Allow controller-manager (running as the installing user) to run its two
+# root-owned helpers without a password:
+#   controller-hidraw-gate — chmods /dev/hidraw* nodes of allowlisted controllers
+#   controller-led         — sets the lightbar of a Sony :rgb:indicator LED
+# Both are tightly scoped and validate their target before touching anything.
 #
 # The first field is the installing user; install.sh substitutes it.
 __INSTALL_USER__ ALL=(root) NOPASSWD: /usr/local/bin/controller-hidraw-gate
+__INSTALL_USER__ ALL=(root) NOPASSWD: /usr/local/bin/controller-led
