@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# controller-led — set a DualSense lightbar colour through the kernel LED class
+# (hid-playstation :rgb:indicator) instead of crafting raw HID output reports.
+# The raw-hidraw path races the driver and gets dropped over Bluetooth, leaving
+# the lightbar on its firmware default; going through the driver is reliable.
+#
+#   controller-led <ledname> <r> <g> <b>        # each channel 0-255
+#
+# Safety: only a *:rgb:indicator LED that belongs to a Sony (054C) HID device is
+# ever written, so this can't be aimed at unrelated LEDs (keyboard, NIC, …).
+# Meant to be invoked through a tightly-scoped NOPASSWD sudoers rule.
+
+set -euo pipefail
+
+led="${1:-}"; r="${2:-}"; g="${3:-}"; b="${4:-}"
+
+# Name only (never a path) — refuse anything but a plain rgb-indicator led name.
+[[ "$led" =~ ^[A-Za-z0-9_.:-]+:rgb:indicator$ ]] || { echo "bad led '$led'" >&2; exit 2; }
+
+dir="/sys/class/leds/$led"
+# Node already gone (e.g. controller disconnected mid-write) — nothing to do.
+[[ -d "$dir" ]] || { echo "$dir absent, nothing to do"; exit 0; }
+
+# Channels must be integers 0-255.
+for v in "$r" "$g" "$b"; do
+  { [[ "$v" =~ ^[0-9]+$ ]] && (( v <= 255 )); } || { echo "bad channel '$v'" >&2; exit 2; }
+done
+
+# HID_ID=BUS:0000VVVV:0000PPPP -> extract the 4-digit vendor; must be Sony.
+ue="$dir/device/uevent"
+[[ -r "$ue" ]] || { echo "cannot read $ue" >&2; exit 3; }
+vid="$(sed -n 's/^HID_ID=[0-9A-Fa-f]*:0*\([0-9A-Fa-f]\{4\}\):.*/\1/p' "$ue" | tr 'a-f' 'A-F')"
+[[ "$vid" == "054C" ]] || { echo "vendor '$vid' of $led not Sony — refused" >&2; exit 3; }
+
+printf '%s' "$r $g $b" > "$dir/multi_intensity"
+echo 255 > "$dir/brightness"
+echo "controller-led: $led -> $r $g $b"
+exit 0

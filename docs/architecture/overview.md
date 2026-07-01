@@ -28,7 +28,8 @@ action the daemon needs: gating raw HID device nodes.
 | Service | `~/.config/systemd/user/controller-manager.service` | autostart with the desktop session |
 | Config | `~/.config/controller-modes.json` | persisted mode per device |
 | HID gate | `/usr/local/bin/controller-hidraw-gate` | privileged `chmod` of `/dev/hidraw*` |
-| Sudoers rule | `/etc/sudoers.d/controller-hidraw` | scoped NOPASSWD for the gate only |
+| LED helper | `/usr/local/bin/controller-led` | privileged write of a Sony `:rgb:indicator` lightbar |
+| Sudoers rule | `/etc/sudoers.d/controller-hidraw` | scoped NOPASSWD for the two helpers |
 
 ## Detection and the device model
 
@@ -43,10 +44,15 @@ unlisted models of a known vendor still work, and non-gamepad nodes that share a
 (headset, motion sensor, touchpad) are excluded. Product IDs are used only to choose a
 nicer display name.
 
-Each detected device becomes a `ControllerInstance`, keyed by its `/dev/input/eventX`
-path. The instance carries the device's **stable identity** (`uniq`, e.g. the Bluetooth
-MAC), which is what configuration and the tray label are keyed on — see
-[per-device identity](../decisions/per-device-identity.md).
+Each detected device becomes a `ControllerInstance`, keyed by its **stable identity**
+(`uniq`, e.g. the Bluetooth MAC; else `vendor:product`) — the same key configuration and the
+tray label use, see [per-device identity](../decisions/per-device-identity.md). Keying on
+identity rather than the `/dev/input/eventX` path matters because a Bluetooth pad
+re-registers on a *new* evdev/hidraw node after every reconnect (e.g. when it is un/re-paired
+for console use): the reconcile pass recognises the same identity and **rebinds** the instance
+to the new node in place — restarting only the remapper — instead of tearing it down and
+rebuilding it, which would churn the tray menu into stuck-disabled items. A pad that vanishes
+is dropped only after a short grace period, so a brief reconnect blip never removes it.
 
 ## Modes
 

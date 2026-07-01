@@ -9,7 +9,7 @@ Supports:
 Multiple controllers simultaneously, each with its own mode.
 """
 
-import os, sys, json, signal, threading, time, subprocess, glob, selectors, zlib
+import os, sys, json, signal, threading, time, subprocess, glob, selectors
 import evdev
 from evdev import UInput, ecodes as e
 import dbus, dbus.service, dbus.mainloop.glib
@@ -143,6 +143,7 @@ def save_config(cfg):
 # dently — only the remapped one is hidden.
 
 GATE_BIN = "/usr/local/bin/controller-hidraw-gate"
+LED_BIN  = "/usr/local/bin/controller-led"
 
 def hidraw_for_event(ev_path):
     """Return all /dev/hidrawN nodes for the HID device behind an evdev node.
@@ -168,6 +169,35 @@ def hidraw_gate(action, nodes):
             )
         except Exception as ex:
             print(f"hidraw_gate: {action} {node} failed: {ex}", file=sys.stderr)
+
+
+def led_indicator_for_event(ev_path):
+    """Return the DualSense RGB-indicator LED name (e.g. 'input38:rgb:indicator')
+    for the HID device behind an evdev node, or None. The hid-playstation driver
+    exposes the lightbar as a multicolor LED; driving it there lets the kernel
+    do the USB/BT output-report framing, so the colour survives BT reconnects —
+    unlike raw hidraw writes, which race the driver and get dropped over BT."""
+    base = f"/sys/class/input/{os.path.basename(ev_path)}/device"
+    if not os.path.exists(base):
+        return None
+    hid_dir = os.path.realpath(os.path.join(base, "..", ".."))
+    nodes = glob.glob(os.path.join(hid_dir, "leds", "*:rgb:indicator"))
+    return os.path.basename(nodes[0]) if nodes else None
+
+def led_set(led, rgb):
+    """Set the lightbar colour via the kernel LED class (root helper).
+    No-op when there is no such LED or the helper/sudo rule is missing."""
+    if not led or not os.path.exists(LED_BIN):
+        return
+    r, g, b = rgb
+    try:
+        subprocess.run(
+            ["sudo", "-n", LED_BIN, led, str(r), str(g), str(b)],
+            timeout=5, check=False,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception as ex:
+        print(f"led_set: {led} failed: {ex}", file=sys.stderr)
 
 
 # ── Remapper thread ──────────────────────────────────────────────────────────
@@ -273,7 +303,7 @@ class Remapper(threading.Thread):
 # ── Controller instance ──────────────────────────────────────────────────────
 
 class ControllerInstance:
-    def __init__(self, path, name, vendor, product, family, mode, uniq, hidraw, bustype):
+    def __init__(self, path, name, vendor, product, family, mode, uniq, hidraw):
         self.path    = path
         self.name    = name
         self.vendor  = vendor
@@ -281,79 +311,29 @@ class ControllerInstance:
         self.family  = family
         self.mode    = mode
         self.uniq    = uniq       # stable per-device id (BT MAC / serial)
+        # Stable key across reconnects: the BT MAC / serial, else vendor:product.
+        # A reconnect changes the evdev path but not this, so we can recognise the
+        # same physical pad and rebind it instead of churning the tray menu.
+        self.ident   = uniq or f"{vendor:04x}:{product:04x}"
         self.hidraw  = hidraw     # list of /dev/hidrawN (may be empty)
-        self.bustype = bustype
-        self._remap      = None
-        self._hidraw_fd  = None   # kept open for LED output reports
-        self._out_seq    = 0      # BT output report sequence (high nibble of seq_tag)
-        self._open_hidraw_fd()    # open before any gate may chmod it to 000
+        # DualSense lightbar via the kernel LED class (…:rgb:indicator); None for
+        # Xbox pads or when the node can't be resolved. Re-resolved per instance,
+        # so it tracks the node renumbering that happens on every BT reconnect.
+        self.led     = led_indicator_for_event(path) if family == "ps5" else None
+        self._remap  = None
+        self._gone_since = None   # monotonic time first seen absent, for grace
 
     def display_name(self):
         return self.name
 
     # ── LED lightbar ─────────────────────────────────────────────────────────
 
-    def _open_hidraw_fd(self):
-        """Open the hidraw node for HID output reports (LED). PS5 only."""
-        if not self.hidraw or self.family != "ps5":
-            return
-        node = self.hidraw[0]
-        try:
-            self._hidraw_fd = open(node, "r+b", buffering=0)
-        except Exception as ex:
-            print(f"led: cannot open {node}: {ex}", file=sys.stderr)
-
-    def _close_hidraw_fd(self):
-        if self._hidraw_fd:
-            try:
-                self._hidraw_fd.close()
-            except Exception:
-                pass
-            self._hidraw_fd = None
-
     def _apply_led(self):
-        """Write the lightbar color for the current mode. No-op for Xbox."""
-        if not self._hidraw_fd or self.family != "ps5":
+        """Set the lightbar colour for the current mode via the kernel LED class
+        (hid-playstation …:rgb:indicator). No-op for Xbox pads (no lightbar)."""
+        if self.family != "ps5" or not self.led:
             return
-        r, g, b = MODE_LED.get(self.mode, (0, 0, 0))
-        try:
-            if self.bustype == e.BUS_BLUETOOTH:
-                self._write_led_bt(r, g, b)
-            else:
-                self._write_led_usb(r, g, b)
-        except Exception as ex:
-            print(f"led: write failed: {ex}", file=sys.stderr)
-
-    def _write_led_bt(self, r, g, b):
-        # BT output report 0x31 — 78 bytes. Layout per Linux hid-playstation.c:
-        #   [0] report_id, [1] seq_tag, [2] tag (0x10 — required, else ignored),
-        #   [3..] common report, [74:78] little-endian CRC32.
-        # Common offsets: valid_flag1=1, lightbar R/G/B=44/45/46
-        #   → absolute valid_flag1=4, R/G/B=47/48/49.
-        buf = bytearray(78)
-        buf[0]  = 0x31                       # report ID
-        buf[1]  = (self._out_seq << 4) & 0xFF  # seq in high nibble (avoids dedup)
-        buf[2]  = 0x10                       # DS_OUTPUT_TAG — mandatory or no-op
-        buf[4]  = 0x04                       # valid_flag1: LIGHTBAR_CONTROL_ENABLE (BIT 2)
-        buf[47] = r
-        buf[48] = g
-        buf[49] = b
-        crc = zlib.crc32(b'\xa2' + bytes(buf[:74])) & 0xFFFFFFFF
-        buf[74:78] = crc.to_bytes(4, 'little')
-        self._hidraw_fd.write(bytes(buf))
-        self._out_seq = (self._out_seq + 1) % 16
-
-    def _write_led_usb(self, r, g, b):
-        # USB output report 0x02 — 48 bytes. Common starts at byte 1 (after
-        # report_id); no CRC. Common offsets: valid_flag1=1, lightbar R/G/B=44/45/46
-        #   → absolute valid_flag1=2, R/G/B=45/46/47.
-        buf = bytearray(48)
-        buf[0]  = 0x02          # report ID
-        buf[2]  = 0x04          # valid_flag1: LIGHTBAR_CONTROL_ENABLE (BIT 2)
-        buf[45] = r
-        buf[46] = g
-        buf[47] = b
-        self._hidraw_fd.write(bytes(buf))
+        led_set(self.led, MODE_LED.get(self.mode, (0, 0, 0)))
 
     # ── mode / lifecycle ──────────────────────────────────────────────────────
 
@@ -387,6 +367,18 @@ class ControllerInstance:
 
         self._apply_led()
 
+    def rebind(self, path, name, hidraw):
+        """Same physical pad reappeared on a new evdev/hidraw node after a (BT)
+        reconnect. Refresh the node bindings and restart the remapper in place —
+        the instance (and thus its tray-menu entry) is kept, so the host sees no
+        structural change."""
+        hidraw_gate("restore", self.hidraw)   # release the old node (usually gone)
+        self.path   = path
+        self.name   = name
+        self.hidraw = hidraw
+        self.led    = led_indicator_for_event(path) if self.family == "ps5" else None
+        self.apply_mode()                     # re-grab, re-gate, re-apply LED
+
     def virtual_path(self):
         return self._remap.virtual_path if self._remap else None
 
@@ -397,15 +389,22 @@ class ControllerInstance:
         # Restore raw HID access whenever we stop managing this pad
         # (disconnect or shutdown), so a blocked node never lingers.
         hidraw_gate("restore", self.hidraw)
-        self._close_hidraw_fd()
 
 
 # ── Controller Manager ───────────────────────────────────────────────────────
 
+# Grace period before a vanished controller is really dropped. A Bluetooth pad
+# re-registers on a *new* evdev/hidraw node after every reconnect (e.g. when it
+# is un/re-paired for console use); without this window the brief gap would tear
+# the instance down and rebuild it, churning the tray menu into stuck-disabled
+# items. Instances are keyed by stable identity (BT MAC / serial), so a pad that
+# returns within the window is rebound in place instead of removed and re-added.
+REMOVE_GRACE = 5.0   # seconds; ~2× the 2 s poll interval
+
 class ControllerManager:
     def __init__(self, on_change_cb):
         self._lock       = threading.Lock()
-        self._instances  = {}      # path → ControllerInstance
+        self._instances  = {}      # ident → ControllerInstance
         self._config     = load_config()
         self._on_change  = on_change_cb   # called (from thread) when list changes
         self._monitor_th = threading.Thread(target=self._monitor, daemon=True)
@@ -459,41 +458,57 @@ class ControllerManager:
                     "family":  family,
                     "uniq":    dev.uniq or "",
                     "hidraw":  hidraw_for_event(path),
-                    "bustype": dev.info.bustype,
                 })
             finally:
                 dev.close()
         return result
 
+    @staticmethod
+    def _ident(d):
+        """Stable identity of a scanned controller — matches ControllerInstance.ident."""
+        return d["uniq"] or f'{d["vendor"]:04x}:{d["product"]:04x}'
+
     def _poll(self):
-        """One scan/reconcile pass; returns True if the instance set changed."""
-        found = {d["path"]: d for d in self._scan()}
+        """One scan/reconcile pass; returns True if the *set* of controllers
+        changed. A reconnect that only moves a pad to a new node does not count —
+        it is rebound in place, so the tray menu is left untouched."""
+        found = {}
+        for d in self._scan():
+            found[self._ident(d)] = d   # identical padless pads collapse; acceptable
         changed = False
+        now = time.monotonic()
         with self._lock:
-            # Remove disconnected
-            for path in list(self._instances):
-                if path not in found:
-                    self._instances[path].stop()
-                    del self._instances[path]
-                    changed = True
-            # Add new
-            for path, d in found.items():
-                if path not in self._instances:
-                    cfg_key = d["uniq"] or f'{d["vendor"]:04x}:{d["product"]:04x}'
-                    default = DEFAULT_MODES.get(d["family"], "ps5-native")
-                    mode = self._config.get(cfg_key, default)
-                    # Drop modes no longer offered for this family (e.g. a
-                    # stored "xbox-ps5" from before it was removed): fall
-                    # back to the native default instead of silently
-                    # applying an unselectable mode.
-                    if mode not in MODES_FOR_FAMILY.get(d["family"], []):
-                        mode = default
-                    inst = ControllerInstance(
-                        d["path"], d["name"], d["vendor"], d["product"],
-                        d["family"], mode, d["uniq"], d["hidraw"], d["bustype"])
-                    inst.apply_mode()
-                    self._instances[path] = inst
-                    changed = True
+            # Reconcile known instances: rebind on reconnect, drop after grace.
+            for ident, inst in list(self._instances.items()):
+                d = found.get(ident)
+                if d is None:                       # absent this pass
+                    if inst._gone_since is None:
+                        inst._gone_since = now
+                    elif now - inst._gone_since >= REMOVE_GRACE:
+                        inst.stop()
+                        del self._instances[ident]
+                        changed = True
+                    continue
+                inst._gone_since = None             # present again
+                if d["path"] != inst.path:          # reconnected on a new node
+                    inst.rebind(d["path"], d["name"], d["hidraw"])
+            # Add genuinely new controllers.
+            for ident, d in found.items():
+                if ident in self._instances:
+                    continue
+                default = DEFAULT_MODES.get(d["family"], "ps5-native")
+                mode = self._config.get(ident, default)
+                # Drop modes no longer offered for this family (e.g. a stored
+                # "xbox-ps5" from before it was removed): fall back to the native
+                # default instead of silently applying an unselectable mode.
+                if mode not in MODES_FOR_FAMILY.get(d["family"], []):
+                    mode = default
+                inst = ControllerInstance(
+                    d["path"], d["name"], d["vendor"], d["product"],
+                    d["family"], mode, d["uniq"], d["hidraw"])
+                inst.apply_mode()
+                self._instances[ident] = inst
+                changed = True
         if changed:
             GLib.idle_add(self._on_change)
         return changed
@@ -507,15 +522,14 @@ class ControllerManager:
         with self._lock:
             return list(self._instances.values())
 
-    def set_mode(self, path, mode):
+    def set_mode(self, ident, mode):
         with self._lock:
-            inst = self._instances.get(path)
+            inst = self._instances.get(ident)
             if not inst:
                 return
             inst.mode = mode
             inst.apply_mode()
-            cfg_key = inst.uniq or f"{inst.vendor:04x}:{inst.product:04x}"
-            self._config[cfg_key] = mode
+            self._config[inst.ident] = mode
         save_config(self._config)
         GLib.idle_add(self._on_change)
 
@@ -600,13 +614,13 @@ class DbusmenuServer(dbus.service.Object):
         return [self._make_item(id_, props) for id_, props in self._item_props()]
 
     def _build_lookup(self):
-        """id → (controller_path, mode) for click handling."""
+        """id → (controller_ident, mode) for click handling."""
         lookup = {}
         id_ = 1
         for inst in self._mgr.get_instances():
             id_ += 1   # skip header
             for mode in MODES_FOR_FAMILY.get(inst.family, []):
-                lookup[id_] = (inst.path, mode)
+                lookup[id_] = (inst.ident, mode)
                 id_ += 1
             id_ += 1   # separator
         return lookup
@@ -667,8 +681,8 @@ class DbusmenuServer(dbus.service.Object):
             return
         lookup = self._build_lookup()
         if id_ in lookup:
-            ctrl_path, mode = lookup[id_]
-            self._mgr.set_mode(ctrl_path, mode)
+            ctrl_ident, mode = lookup[id_]
+            self._mgr.set_mode(ctrl_ident, mode)
 
     @dbus.service.method("com.canonical.dbusmenu",
                          in_signature="a(isvu)", out_signature="ai")

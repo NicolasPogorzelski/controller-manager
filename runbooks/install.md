@@ -26,6 +26,7 @@ cd controller-manager
    - `controller-manager.service` → `~/.config/systemd/user/controller-manager.service`
 2. **Root space** (asks for a password):
    - `controller-hidraw-gate` → `/usr/local/bin/controller-hidraw-gate` (root, `0755`)
+   - `controller-led` → `/usr/local/bin/controller-led` (root, `0755`)
    - `controller-hidraw.sudoers` → `/etc/sudoers.d/controller-hidraw` (root, `0440`)
    - `visudo -c` to validate the sudoers files
 3. **Service**: `daemon-reload` and restart, then prints the active state.
