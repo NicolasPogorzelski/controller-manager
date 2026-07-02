@@ -330,10 +330,31 @@ class ControllerInstance:
 
     def _apply_led(self):
         """Set the lightbar colour for the current mode via the kernel LED class
-        (hid-playstation …:rgb:indicator). No-op for Xbox pads (no lightbar)."""
-        if self.family != "ps5" or not self.led:
+        (hid-playstation …:rgb:indicator). Re-resolves the node from the live
+        evdev path on every call and never trusts the cached name: the LED node is
+        renumbered on every (BT) reconnect, so a stale name would make the write
+        land on a now-dead node. No-op for Xbox pads or when no node resolves."""
+        if self.family != "ps5":
             return
-        led_set(self.led, MODE_LED.get(self.mode, (0, 0, 0)))
+        led = led_indicator_for_event(self.path)
+        if not led:
+            return
+        self.led = led
+        led_set(led, MODE_LED.get(self.mode, (0, 0, 0)))
+
+    def refresh_led(self):
+        """Repaint the lightbar when its LED node has renumbered under us. The
+        …:rgb:indicator node is named after the inputN instance, which bumps on
+        every (BT) reconnect *even when the /dev/input/eventX path is reused* — so
+        the path-keyed rebind() never sees the change and the daemon would keep
+        painting the old, now-dead node (a mode switch then changes no colour).
+        Called each monitor tick: when the live node differs from the one we last
+        painted, repaint it. Idempotent while the node is stable."""
+        if self.family != "ps5":
+            return
+        led = led_indicator_for_event(self.path)
+        if led and led != self.led:
+            self._apply_led()
 
     # ── mode / lifecycle ──────────────────────────────────────────────────────
 
@@ -489,8 +510,18 @@ class ControllerManager:
                         del self._instances[ident]
                         changed = True
                     continue
+                was_gone = inst._gone_since is not None
                 inst._gone_since = None             # present again
                 if d["path"] != inst.path:          # reconnected on a new node
+                    inst.rebind(d["path"], d["name"], d["hidraw"])
+                elif was_gone:
+                    # Reconnected on the *reused* evdev path: same eventX number,
+                    # but a fresh device underneath (BT re-pair / power-cycle). The
+                    # old remapper's grab died with the disconnect and the firmware
+                    # reset the lightbar, yet the path is unchanged so the check
+                    # above misses it — the pad would come back un-remapped and on
+                    # the wrong colour until a manual switch. Re-assert the whole
+                    # mode: restart the remapper, re-gate the hidraw node, repaint.
                     inst.rebind(d["path"], d["name"], d["hidraw"])
             # Add genuinely new controllers.
             for ident, d in found.items():
@@ -511,6 +542,12 @@ class ControllerManager:
                 changed = True
         if changed:
             GLib.idle_add(self._on_change)
+        # LED self-heal, outside the lock (led_set may shell out to sudo, and we
+        # must not stall set_mode/get_instances behind it): a pad rebound while
+        # its :rgb:indicator node still lagged gets its colour applied on a later
+        # tick instead of being stuck on the firmware-default blue.
+        for inst in self.get_instances():
+            inst.refresh_led()
         return changed
 
     def _monitor(self):

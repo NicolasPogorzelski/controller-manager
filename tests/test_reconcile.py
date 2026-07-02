@@ -19,6 +19,10 @@ except ModuleNotFoundError as ex:
     print(f"SKIP: runtime dependency missing ({ex.name}) — needs evdev/dbus/gi")
     sys.exit(0)
 
+# Keep a handle on the real ControllerInstance before the reconcile scenarios
+# swap in a lightweight fake; Scenario E exercises the real led self-heal.
+RealInst = cm.ControllerInstance
+
 # Controllable monotonic clock so the grace window is tested without real waits.
 clock = [1000.0]
 cm.time.monotonic = lambda: clock[0]
@@ -37,6 +41,7 @@ class FakeInst:
         self.rebinds += 1; self.path = path; self.name = name; self.hidraw = hidraw
     def stop(self): self.stopped = True
     def virtual_path(self): return None
+    def refresh_led(self): pass   # led self-heal is exercised separately (Scenario E)
 
 cm.ControllerInstance = FakeInst
 
@@ -101,6 +106,68 @@ mgr = make_mgr([[dev("event25", uniq="AA:AA")],
 mgr._poll()
 check(mgr._poll() is True,      "new distinct controller -> changed=True")
 check(len(mgr._instances) == 2, "both controllers tracked")
+
+# ── Scenario G: reconnect on the *reused* evdev path (same eventX number) ────
+# The pad vanishes and returns on the *same* /dev/input/eventX. rebind() must
+# still fire so the mode is re-asserted (remapper restarted, hidraw re-gated,
+# lightbar repainted) — without it the pad comes back un-remapped and wrongly
+# coloured until a manual switch. It is not a structural change (no menu churn).
+print("Scenario G: reconnect on a reused evdev path must re-assert the mode")
+mgr = make_mgr([[dev("event25")], [], [dev("event25")]])
+mgr._poll()
+inst = next(iter(mgr._instances.values()))
+clock[0] += 1.0
+check(mgr._poll() is False,  "absent <grace -> kept, no menu change")
+check(inst.rebinds == 0,     "no rebind while absent")
+clock[0] += 1.0
+check(mgr._poll() is False,  "return on same path -> changed=False (no menu churn)")
+check(inst.rebinds == 1,     "reconnect on reused path -> rebind() (mode re-asserted)")
+
+# ── Scenario E: lightbar node lags evdev on reconnect → self-heal ───────────
+print("Scenario E: :rgb:indicator node absent at bind time -> applied once it appears")
+led_calls = []
+cm.hidraw_gate = lambda *a, **k: None          # no sudo/hidraw in the test
+cm.led_set     = lambda led, rgb: led_calls.append((led, rgb))
+resolver = [None]                              # what led_indicator_for_event returns
+cm.led_indicator_for_event = lambda path: resolver[0]
+
+# Pad (re)binds while the driver has not created the LED node yet.
+inst = RealInst("event30", "DualSense", 0x054c, 0x0ce6,
+                "ps5", "ps5-native", "ac:36:1b:70:70:e8", [])
+check(inst.led is None,        "led unresolved while node absent at bind")
+inst.refresh_led()
+check(inst.led is None and not led_calls,
+      "tick with node still absent -> no-op (no colour written)")
+
+resolver[0] = "input30:rgb:indicator"          # driver has now created the node
+inst.refresh_led()
+check(inst.led == "input30:rgb:indicator",     "node appeared -> led resolved")
+check(led_calls == [("input30:rgb:indicator", (0, 0, 255))],
+      "colour applied exactly once (blue = ps5-native)")
+
+inst.refresh_led()                             # further ticks must not re-write
+check(len(led_calls) == 1,     "already bound -> subsequent ticks are no-ops")
+
+# ── Scenario F: LED node renumbers while the evdev path is reused ────────────
+# The real regression: a reconnect bumps the inputN-derived :rgb:indicator name
+# (input37 -> input44) but the /dev/input/eventX path is reused, so the
+# path-keyed rebind() never fires. The daemon must still repaint the NEW node.
+print("Scenario F: node renumbers on reconnect (evdev path reused) -> repaint new node")
+led_calls.clear()
+resolver[0] = "input37:rgb:indicator"          # node present at bind
+inst = RealInst("event25", "DualSense", 0x054c, 0x0ce6,
+                "ps5", "ps5-xbox", "ac:36:1b:70:70:e8", [])
+check(inst.led == "input37:rgb:indicator", "led bound to the node present at construct")
+check(not led_calls,                       "construct itself does not paint")
+
+resolver[0] = "input44:rgb:indicator"          # reconnect renumbered the node
+inst.refresh_led()
+check(inst.led == "input44:rgb:indicator", "renumbered node picked up on next tick")
+check(led_calls == [("input44:rgb:indicator", (0, 128, 0))],
+      "NEW node repainted exactly once (green = ps5-xbox)")
+
+inst.refresh_led()                             # node stable now
+check(len(led_calls) == 1,                 "stable node -> no repaint spam")
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}")
