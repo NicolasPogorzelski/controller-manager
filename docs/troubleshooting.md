@@ -51,6 +51,33 @@ Confirm the gate state directly (replace the node with your controller's, see th
 ls -l /dev/hidrawN     # remapped → c--------- (000) ; native → crw-rw-rw- (666)
 ```
 
+## The DualSense lightbar shows the wrong colour after a reconnect
+
+Symptom: the pad is correctly remapped (e.g. output as Xbox, raw HID gated) but the lightbar
+stays **blue** (the firmware default) instead of the mode colour — most visibly after
+toggling the controller off/on several times. The mode itself is fine; only the colour cue
+is stale, which can make a mode switch *look* like it did nothing.
+
+Cause: on a reconnect the hid-playstation `…:rgb:indicator` LED node is renumbered (its name
+follows the `inputN` counter, which bumps even when the `/dev/input/eventX` path is reused),
+and the controller firmware resets the lightbar to its default on power-cycle. The daemon
+re-resolves the live node and re-asserts the mode colour on the next monitor tick, so it
+normally corrects itself within ~2 s. Confirm the kernel LED matches the mode:
+
+```bash
+# find the DualSense indicator LED, then read its stored colour
+for l in /sys/class/leds/*:rgb:indicator; do
+  echo "$l -> $(cat "$l/multi_intensity")  (brightness $(cat "$l/brightness"))"
+done
+# ps5-native = 0 0 255 (blue) ; ps5-xbox = 0 128 0 (green)
+```
+
+If `multi_intensity` already matches the mode but the **hardware** lightbar does not, the
+driver dropped the output report on the wire (rare, Bluetooth). Re-selecting the mode in the
+tray, or a reconnect, re-asserts it. If the LED value itself is wrong, check that
+`controller-led` is installed and authorised (`/etc/sudoers.d/controller-hidraw`) — without
+it the colour write is a silent no-op.
+
 ## A remapped controller has working sticks but dead buttons
 
 This is the Xbox→PlayStation direction, which is intentionally **not offered** for exactly

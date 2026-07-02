@@ -51,8 +51,11 @@ identity rather than the `/dev/input/eventX` path matters because a Bluetooth pa
 re-registers on a *new* evdev/hidraw node after every reconnect (e.g. when it is un/re-paired
 for console use): the reconcile pass recognises the same identity and **rebinds** the instance
 to the new node in place — restarting only the remapper — instead of tearing it down and
-rebuilding it, which would churn the tray menu into stuck-disabled items. A pad that vanishes
-is dropped only after a short grace period, so a brief reconnect blip never removes it.
+rebuilding it, which would churn the tray menu into stuck-disabled items. The same re-assert
+also runs when a pad returns on a *reused* `eventX` path (detected as a previously-absent
+instance reappearing, not a path change): the device underneath — and thus its remapper grab
+and lightbar — is new even though the path number is not. A pad that vanishes is dropped only
+after a short grace period, so a brief reconnect blip never removes it.
 
 ## Modes
 
@@ -101,6 +104,36 @@ mode. When a controller enters a remap mode the daemon asks the helper to `chmod
 controller's **specific** hidraw node to `000`; native mode restores it to `666`. Because
 the gate targets a node (not a vendor:product pair), two identical controllers are gated
 independently. Full rationale: [the hidraw gate](../decisions/hidraw-gate.md).
+
+## The lightbar (DualSense)
+
+A DualSense mode is signalled on the controller's lightbar: blue for `ps5-native`, green
+for `ps5-xbox`. The colour is driven through the kernel **LED class** — the
+hid-playstation `…:rgb:indicator` multicolor node, written by the `controller-led` helper —
+not via raw hidraw output reports, which race the driver and get dropped over Bluetooth
+(leaving the lightbar on its firmware default). The kernel does the USB/BT report framing,
+so the colour is reliable.
+
+The lightbar is fragile across reconnects for two reasons, and the daemon defends against
+both:
+
+- **The LED node renumbers.** Its name derives from the `inputN` instance counter, which
+  bumps on *every* reconnect (`input38` → `input47` → …) — even when the `/dev/input/eventX`
+  path is reused, so a path-keyed check would miss it. `_apply_led()` therefore never trusts
+  a cached node name: it re-resolves the `:rgb:indicator` node from the live evdev path on
+  every write, so a colour can never land on a stale, now-dead node.
+  `ControllerInstance.refresh_led()` (run each monitor tick, outside the reconcile lock
+  because the write may shell out to `sudo`) repaints when the live node differs from the one
+  last painted — covering a renumber that happens without a polled absence.
+- **The firmware resets the lightbar on power-cycle.** A pad toggled off/on returns on its
+  firmware-default blue and un-remapped (its old grab died with the disconnect). Because the
+  evdev path is often reused, the daemon detects such a reconnect by a *presence transition*
+  (a previously absent instance reappearing) rather than a path change, and re-asserts the
+  whole mode — restarting the remapper, re-gating the hidraw node and repainting the lightbar.
+
+A single write issued at the exact instant of reconnect can still be overwritten by the
+device / Steam Input as it comes up; re-asserting one poll later, once the pad is stably
+present, is what makes the colour stick.
 
 ## The tray
 
