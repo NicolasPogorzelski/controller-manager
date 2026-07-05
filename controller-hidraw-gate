@@ -113,6 +113,14 @@ case "$action" in
       touch "$marker"
       chmod_nodes "$dev" 000              # cover pre-marker nodes immediately
       rebind "$dev"                       # revoke open fds; new nodes born gated
+      # Belt & braces for the REBORN nodes: the udev rule should deliver them
+      # at MODE 0000 already, but if a rule-ordering regression ever leaks a
+      # uaccess ACL again, a hard chmod also zeroes the ACL mask.
+      for _ in $(seq 1 15); do            # re-probe takes a moment; ≤1.5 s
+        compgen -G "$dev/hidraw/hidraw*" >/dev/null && break
+        sleep 0.1
+      done
+      chmod_nodes "$dev" 000
       echo "controller-hidraw-gate: block $arg (gated + rebound)"
 
     elif [[ "$action" == restore ]]; then

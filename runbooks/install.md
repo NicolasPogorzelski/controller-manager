@@ -27,7 +27,7 @@ cd controller-manager
 2. **Root space** (asks for a password):
    - `controller-hidraw-gate` → `/usr/local/bin/controller-hidraw-gate` (root, `0755`)
    - `controller-led` → `/usr/local/bin/controller-led` (root, `0755`)
-   - `71-controller-manager.rules` → `/etc/udev/rules.d/` (root, `0644`), then
+   - `72-controller-manager.rules` → `/etc/udev/rules.d/` (root, `0644`), then
      `udevadm control --reload` — gated hidraw nodes must be born inaccessible
    - `controller-hidraw.sudoers` → `/etc/sudoers.d/controller-hidraw` (root, `0440`)
    - `visudo -c` to validate the sudoers files
@@ -79,7 +79,7 @@ systemctl --user daemon-reload
 
 # Remove root-space files
 sudo rm -f /usr/local/bin/controller-hidraw-gate /etc/sudoers.d/controller-hidraw \
-           /etc/udev/rules.d/71-controller-manager.rules
+           /etc/udev/rules.d/72-controller-manager.rules
 sudo udevadm control --reload
 ```
 

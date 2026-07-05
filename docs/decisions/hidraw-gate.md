@@ -49,13 +49,17 @@ volatile node, and consists of three cooperating parts:
 
 1. **Marker file** `/run/controller-manager/gated/<uniq>` — the gate state. `/run` is a
    tmpfs, so markers cannot survive a reboot: the system always boots fail-open.
-2. **udev rule** (`71-controller-manager.rules`) — on every hidraw `add` event of a
+2. **udev rule** (`72-controller-manager.rules`) — on every hidraw `add` event of a
    Sony/Microsoft pad it asks the helper (`udev-check`) whether the parent HID device is
-   gated; if so the node is **born** with `MODE 0000` and, crucially, **without the
-   `uaccess` tag**. The filename `71-` places it after `70-uaccess.rules` (which assigns
-   the tag) and before `73-seat-late.rules` (which turns the tag into a seat-user ACL) —
-   without the tag removal, the desktop user's processes (Steam) would pass straight
-   through `MODE 0000` via the ACL.
+   gated; if so the node is **born** with `MODE :=0000` (final assignment — no later rule
+   can override it) and, crucially, **without the `uaccess` tag**. The filename `72-`
+   places it after the whole `71-*-controllers.rules` family (steam-devices re-adds
+   `MODE 0660` + `uaccess` for Sony pads there — verified in the field to defeat the gate
+   when this rule still ran at `71-`) and before `73-seat-late.rules` (which turns the
+   tag into a seat-user ACL) — without the tag removal, the desktop user's processes
+   (Steam) would pass straight through `MODE 0000` via the ACL. As belt and braces the
+   helper re-chmods the reborn nodes after the rebind, which also zeroes the mask of any
+   ACL that ever leaks through again.
 3. **Driver rebind** — on a gate *transition* the helper unbinds and rebinds the kernel
    HID driver. That destroys **every** open fd on the old nodes (revoking Steam's
    pre-gate handle) and re-probes the pad, which also resets the DualSense lightbar
