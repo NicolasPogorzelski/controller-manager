@@ -436,7 +436,10 @@ class ControllerInstance:
         self.led     = led_indicator_for_event(path) if family == "ps5" else None
         self._remap  = None
         self._gone_since = None   # monotonic time first seen absent, for grace
-        self._foreign_holder = False   # someone held our hidraw last tick
+        # Resting-colour bookkeeping (ps5-native only, see watch_holders):
+        self._holders      = set()   # hidraw holder pids last tick
+        self._settle_until = 0.0     # until then, new holders are reopen noise
+        self._repaint_at   = None    # scheduled one-shot resting repaint
 
     def display_name(self):
         return self.name
@@ -472,25 +475,43 @@ class ControllerInstance:
             self._apply_led()
 
     def watch_holders(self):
-        """Resting-colour policy for ps5-native. While some application holds
-        the pad's raw HID path (Steam, a game with native DualSense support),
-        the lightbar is legitimately theirs — hands off. When the LAST holder
-        disappears, the pad may be left with the lightbar firmware-latched
-        dark (a raw-HID writer can set the 'light out' setup flag; kernel LED
-        writes then change nothing until the driver re-probes). So on that
-        transition: rearm (driver rebind → fresh lightbar setup), re-resolve
-        our renumbered nodes and repaint the resting blue. Remap modes need
-        none of this — there the gate guarantees exclusive LED ownership.
+        """Resting-colour policy for ps5-native (remap modes need none of
+        this — there the gate guarantees exclusive LED ownership). Three
+        kinds of raw-HID holders exist, told apart by the holder-set delta:
+
+        * a RELEASER (game exited): it may leave the lightbar firmware-
+          latched dark ('light out' setup flag — kernel LED writes then
+          change nothing until the driver re-probes), so rearm (driver
+          rebind → fresh lightbar setup) and repaint the resting colour;
+        * a REOPENER (Steam enumerating the pad right after one of our
+          rebinds — it opens even with its PlayStation support disabled):
+          writes its defaults ONCE and goes quiet, so schedule one delayed
+          repaint to get the last word (field-verified: Steam reopened ~6 s
+          after a rebind and stomped the freshly painted colour);
+        * a genuinely NEW holder outside the settle window (a game started):
+          the lightbar is legitimately theirs — hands off, cancel repaints.
+
         Called from the monitor tick, outside the manager lock (shells out)."""
         if self.family != "ps5" or self._target_for_mode() is not None:
             return
-        if hidraw_holders(self.hidraw):
-            self._foreign_holder = True
-            return
-        if self._foreign_holder:
-            self._foreign_holder = False
-            hidraw_gate("rearm", self.uniq, self.hidraw)
-            self._refresh_nodes()
+        now = time.monotonic()
+        holders = hidraw_holders(self.hidraw)
+        if holders != self._holders:
+            released = self._holders - holders
+            self._holders = holders
+            if released:
+                hidraw_gate("rearm", self.uniq, self.hidraw)   # kills fds too
+                self._holders = set()          # we just revoked the rest
+                self._refresh_nodes()
+                self._apply_led()
+                self._settle_until = now + 20.0
+                self._repaint_at   = now + 6.0
+            elif now < self._settle_until:
+                self._repaint_at = now + 6.0   # outlast the reopen write
+            else:
+                self._repaint_at = None        # game took the pad on purpose
+        if self._repaint_at is not None and now >= self._repaint_at:
+            self._repaint_at = None
             self._apply_led()
 
     # ── mode / lifecycle ──────────────────────────────────────────────────────
@@ -527,6 +548,15 @@ class ControllerInstance:
             r = Remapper(self.path, target, bmap)
             r.start()
             self._remap = r
+
+        # The gate transition above may have rebound the driver: every old
+        # holder fd is dead, and enumerators (Steam) will REOPEN the reborn
+        # nodes in a few seconds and write their defaults once — open the
+        # settle window so watch_holders schedules the outlasting repaint
+        # instead of mistaking the reopen for a game start.
+        self._holders      = set()
+        self._settle_until = time.monotonic() + 20.0
+        self._repaint_at   = None
 
         self._apply_led()
 
