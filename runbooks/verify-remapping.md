@@ -41,6 +41,11 @@ PY
 In the tray, set one controller to a remap mode (e.g. **Output as Xbox**). Leave a second
 controller native if you have one.
 
+**Then re-run the identification script from step 1.** A gate transition rebinds the
+kernel driver, so the pad's `eventX`/`hidrawN` numbers CHANGE on the switch — checking the
+node you noted before the switch would inspect a dead node. Use the numbers from the
+re-run below.
+
 ## Verification
 
 **Source is grabbed** — only the daemon holds the remapped controller's evdev node; a
@@ -58,16 +63,24 @@ python3 -c "import evdev; print([evdev.InputDevice(p).name for p in evdev.list_d
 # remapped source → a 'Microsoft X-Box 360 pad' entry is present
 ```
 
-**hidraw is gated per node** — the remapped controller's node is closed, the native one
-open:
+**hidraw is gated per pad** — the remapped controller's node is closed (born gated via
+the udev rule, no ACL), the native one open:
 
 ```bash
-ls -l /dev/hidrawX     # remapped → c--------- (000)
-ls -l /dev/hidrawY     # native   → crw-rw-rw- (666)
+ls -l /dev/hidrawX     # remapped → c--------- (000, no trailing '+')
+ls -l /dev/hidrawY     # native   → crw-rw-rw-+ or crw-rw----+ (open, seat ACL)
 ```
 
-**Cleanup is correct** — set both controllers back to native and re-check: no virtual
-device remains, and both hidraw nodes return to `666`.
+The exact open mode is set by the distribution's controller udev rules; what matters is
+gated = `000` without an ACL, native = readable with the seat ACL (`+`). No process may
+hold the gated node — the gate's driver rebind revoked pre-existing fds (Steam's included):
+
+```bash
+lsof /dev/hidrawX      # remapped → no output (no holders)
+```
+
+**Cleanup is correct** — set both controllers back to native and re-check (numbers change
+again): no virtual device remains, and both hidraw nodes are open again.
 
 **(Optional) Functional check** — read the virtual device while pressing buttons on the
 remapped controller to confirm events are translated:
@@ -87,7 +100,8 @@ for ev in d.read_loop():
 |---|---|
 | Remapped node still has other holders in `lsof` | grab failed — check the daemon log for `grab failed` |
 | No virtual device appears | `uinput` not writable, or grab failed and the virtual device was cleaned up |
-| hidraw still `666` while remapped | gate helper missing or `sudo -n` denied — see [the hidraw gate](../docs/decisions/hidraw-gate.md) |
+| hidraw still open while remapped | gate helper missing, `sudo -n` denied, or the udev rule absent/out-ranked (`ls /etc/udev/rules.d/72-controller-manager.rules`) — see [the hidraw gate](../docs/decisions/hidraw-gate.md) |
+| hidraw open again seconds after gating | a later udev rule re-opened the reborn node — the `72-` rule must sort after all `71-*-controllers.rules` |
 | Virtual device lingers after returning to native | lifecycle bug — restart the service and report it |
 
 ## Rollback

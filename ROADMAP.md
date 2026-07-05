@@ -4,8 +4,8 @@ Short, rolling list of where this project stands and what comes next. Newest sta
 
 ## Status — 2026-07-05
 
-Root causes of the three field bugs found, fixed and unit-tested (live verification on
-hardware pending):
+Root causes of the three field bugs found, fixed, unit-tested and **verified on
+hardware** with Steam running throughout (merged to `main` via PR #3; Issue #2 closed):
 
 - **Tray menu items stuck disabled / clicks dead after reconnect churn (Issue #2).**
   Verified live: the daemon served `enabled=true` while the GNOME appindicator host (the
@@ -24,8 +24,8 @@ hardware pending):
 
 ## Next up
 
-- Live verification of the above on hardware (menu after churn, green with Steam
-  running, resting blue after game exit, multi-controller: 2× DualSense + 2× Xbox).
+- Multi-controller verification (2× DualSense + 2× Xbox simultaneously: independent
+  modes/colours, "DualSense 1 / 2" menu numbering) — the single-pad path is verified.
 - Protocol research for broader transport support (Xbox Wireless dongle, GIP, …).
 - **Xbox → DualSense output via uhid** (real hidraw node with a DualSense report
   descriptor) — the prerequisite for offering `xbox-ps5`; see

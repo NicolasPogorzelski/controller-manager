@@ -1,9 +1,10 @@
 # Architecture Overview
 
-Controller Manager is a single user-space daemon (`controller-manager.py`) plus a small
-root-owned helper (`controller-hidraw-gate`). The daemon detects controllers, applies a
-per-device mode, and serves a tray menu over D-Bus. The helper performs the one privileged
-action the daemon needs: gating raw HID device nodes.
+Controller Manager is a single user-space daemon (`controller-manager.py`) plus two small
+root-owned helpers (`controller-hidraw-gate`, `controller-led`) and one udev rule. The
+daemon detects controllers, applies a per-device mode, and serves a tray menu over D-Bus.
+The helpers perform the privileged actions the daemon needs: gating raw HID access and
+driving the DualSense lightbar.
 
 ```
                          controller-manager.py (systemd --user)
@@ -17,7 +18,12 @@ action the daemon needs: gating raw HID device nodes.
                          └───────────────┬────────────────────────────────┘
                                          │ sudo -n (NOPASSWD, scoped)
                                          ▼
-                         controller-hidraw-gate  ──► chmod /dev/hidraw*
+                         controller-hidraw-gate ──► identity-keyed gate:
+                         controller-led            marker + driver rebind
+                                  ▲                + lightbar colour
+                                  │ udev-check (PROGRAM)
+                         72-controller-manager.rules: gated hidraw
+                         nodes are BORN inaccessible (MODE 0000)
 ```
 
 ## Component map
@@ -27,7 +33,9 @@ action the daemon needs: gating raw HID device nodes.
 | Daemon | `~/.local/bin/controller-manager.py` | detection, remapping, tray, hotplug |
 | Service | `~/.config/systemd/user/controller-manager.service` | autostart with the desktop session |
 | Config | `~/.config/controller-modes.json` | persisted mode per device |
-| HID gate | `/usr/local/bin/controller-hidraw-gate` | privileged `chmod` of `/dev/hidraw*` |
+| HID gate | `/usr/local/bin/controller-hidraw-gate` | identity-keyed gating: markers, driver rebind (fd revoke + lightbar rearm), chmod |
+| Gate udev rule | `/etc/udev/rules.d/72-controller-manager.rules` | gated hidraw nodes are born `MODE 0000`, without the uaccess tag |
+| Gate state | `/run/controller-manager/gated/<uniq>` | marker per gated pad (tmpfs — reboots fail open) |
 | LED helper | `/usr/local/bin/controller-led` | privileged write of a Sony `:rgb:indicator` lightbar |
 | Sudoers rule | `/etc/sudoers.d/controller-hidraw` | scoped NOPASSWD for the two helpers |
 
@@ -42,10 +50,13 @@ seconds. A device is treated as a controller when:
 Recognising by vendor plus capability — rather than a fixed product-ID list — means
 unlisted models of a known vendor still work, and non-gamepad nodes that share a vendor id
 (headset, motion sensor, touchpad) are excluded. Product IDs are used only to choose a
-nicer display name.
+nicer display name. Software-emulated pads that advertise a real Sony/Microsoft vendor id
+(Sunshine/inputtino creates them over uhid for stream clients) are excluded by their
+synthetic `phys` / "(virtual)" name — adopting one would remap a stream client's input.
 
 Each detected device becomes a `ControllerInstance`, keyed by its **stable identity**
-(`uniq`, e.g. the Bluetooth MAC; else `vendor:product`) — the same key configuration and the
+(`uniq`, e.g. the Bluetooth MAC; else the physical attachment point `phys`, which keeps two
+identical serial-less USB pads apart; else `vendor:product`) — the same key configuration and the
 tray label use, see [per-device identity](../decisions/per-device-identity.md). Keying on
 identity rather than the `/dev/input/eventX` path matters because a Bluetooth pad
 re-registers on a *new* evdev/hidraw node after every reconnect (e.g. when it is un/re-paired
@@ -100,10 +111,15 @@ device is closed so it cannot linger. Virtual devices are excluded from the dete
 
 An `evdev` grab hides a device only on the evdev layer. Some applications read controllers
 straight from `/dev/hidraw*`, bypassing the grab, which causes double input in a remapped
-mode. When a controller enters a remap mode the daemon asks the helper to `chmod` that
-controller's **specific** hidraw node to `000`; native mode restores it to `666`. Because
-the gate targets a node (not a vendor:product pair), two identical controllers are gated
-independently. Full rationale: [the hidraw gate](../decisions/hidraw-gate.md).
+mode — and a `chmod` alone cannot stop a process that opened the node *before* the gate
+(Steam Input opens every pad on connect and keeps the fd). The gate is therefore keyed by
+the pad's **stable identity** and works in three parts: a marker file records the gate
+state, a driver **rebind** revokes every existing fd (and resets the DualSense lightbar
+latch), and a udev rule makes the reborn hidraw nodes be **born** inaccessible (`MODE
+0000`, no uaccess ACL) so nothing can re-open them. Being identity-keyed, the gate
+survives reconnects (the pad returns born-gated) and gates two identical controllers
+independently; a reboot clears all markers, so the system always starts fail-open. Full
+rationale and the rule-ordering pitfalls: [the hidraw gate](../decisions/hidraw-gate.md).
 
 ## The lightbar (DualSense)
 
@@ -131,17 +147,28 @@ both:
   (a previously absent instance reappearing) rather than a path change, and re-asserts the
   whole mode — restarting the remapper, re-gating the hidraw node and repainting the lightbar.
 
-A single write issued at the exact instant of reconnect can still be overwritten by the
-device / Steam Input as it comes up; re-asserting one poll later, once the pad is stably
-present, is what makes the colour stick.
+In `ps5-native` the lightbar has a second legitimate writer: applications with raw HID
+access (games with native DualSense support; Steam enumerates pads even with its
+PlayStation support disabled). The daemon watches the pad's hidraw **holders**: while a
+game holds the pad the lightbar is its; when the last holder exits, the daemon rearms the
+pad (driver rebind — a raw writer may have firmware-latched the lightbar dark) and
+repaints the resting blue; a reopen shortly after one of our own rebinds (Steam writes its
+defaults once and goes quiet) is outlasted by a delayed repaint. In the remap mode none of
+this is needed — the gate guarantees exclusive LED ownership, so green simply holds. Full
+policy: [Steam coexistence](../decisions/steam-coexistence.md).
 
 ## The tray
 
 The tray is a `StatusNotifierItem` served directly over D-Bus, with its menu provided by a
 `com.canonical.dbusmenu` object — no GUI toolkit is linked. The item is registered with
-the `StatusNotifierWatcher` using its **object path**, and the menu is rebuilt on every
-change (mode switch or hotplug). Each connected controller becomes a section of radio
-items; selecting one calls back into `ControllerManager.set_mode()`.
+the `StatusNotifierWatcher` using its **object path**. The menu model is built once per
+state change and cached; structural changes (hotplug) allocate **fresh, never-recycled
+item ids**, while display-only changes (the radio checkmark) keep their ids and are pushed
+as `ItemsPropertiesUpdated` deltas — hosts that cache item properties per id (GNOME's
+appindicator extension) would otherwise keep stale properties for a reused id and render
+entries stuck disabled. Each connected controller becomes a section of radio items;
+selecting one calls back into `ControllerManager.set_mode()` via the cached id lookup.
+Full rationale: [dbusmenu item model](../decisions/tray-menu-model.md).
 
 ## Lifecycle and persistence
 
@@ -149,6 +176,6 @@ items; selecting one calls back into `ControllerManager.set_mode()`.
   ones; stopping always restores the hidraw node so a gate never lingers after a
   disconnect.
 - **Persistence:** `set_mode()` writes the chosen mode to `controller-modes.json`, keyed
-  by the device's `uniq`.
+  by the device's stable identity (`uniq`, else `phys:…`).
 - **Shutdown:** on `SIGTERM`/`SIGINT` the daemon stops every instance, releasing grabs and
   restoring all gated nodes.
