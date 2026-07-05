@@ -29,11 +29,12 @@ cm.time.monotonic = lambda: clock[0]
 
 # Lightweight stand-in for ControllerInstance: records what the reconcile did.
 class FakeInst:
-    def __init__(self, path, name, vendor, product, family, mode, uniq, hidraw):
+    def __init__(self, path, name, vendor, product, family, mode, uniq, phys,
+                 hidraw):
         self.path = path; self.name = name; self.vendor = vendor
         self.product = product; self.family = family; self.mode = mode
-        self.uniq = uniq; self.hidraw = hidraw
-        self.ident = uniq or f"{vendor:04x}:{product:04x}"
+        self.uniq = uniq; self.phys = phys; self.hidraw = hidraw
+        self.ident = cm.ident_of(vendor, product, uniq, phys)
         self._gone_since = None
         self.rebinds = 0; self.stopped = False
     def apply_mode(self): pass
@@ -41,7 +42,9 @@ class FakeInst:
         self.rebinds += 1; self.path = path; self.name = name; self.hidraw = hidraw
     def stop(self): self.stopped = True
     def virtual_path(self): return None
+    def remap_healthy(self): return True  # liveness re-assert tested in Scenario H
     def refresh_led(self): pass   # led self-heal is exercised separately (Scenario E)
+    def watch_holders(self): pass # resting-colour policy needs /proc + sudo — not here
 
 cm.ControllerInstance = FakeInst
 
@@ -51,9 +54,10 @@ def make_mgr(scans):
     mgr._scan = lambda: next(it)
     return mgr
 
-def dev(path, uniq="ac:36:1b:70:70:e8"):
+def dev(path, uniq="ac:36:1b:70:70:e8", phys=""):
     return {"path": path, "name": "DualSense", "vendor": 0x054c,
-            "product": 0x0ce6, "family": "ps5", "uniq": uniq, "hidraw": []}
+            "product": 0x0ce6, "family": "ps5", "uniq": uniq, "phys": phys,
+            "hidraw": []}
 
 fails = []
 def check(cond, msg):
@@ -133,7 +137,7 @@ cm.led_indicator_for_event = lambda path: resolver[0]
 
 # Pad (re)binds while the driver has not created the LED node yet.
 inst = RealInst("event30", "DualSense", 0x054c, 0x0ce6,
-                "ps5", "ps5-native", "ac:36:1b:70:70:e8", [])
+                "ps5", "ps5-native", "ac:36:1b:70:70:e8", "", [])
 check(inst.led is None,        "led unresolved while node absent at bind")
 inst.refresh_led()
 check(inst.led is None and not led_calls,
@@ -156,7 +160,7 @@ print("Scenario F: node renumbers on reconnect (evdev path reused) -> repaint ne
 led_calls.clear()
 resolver[0] = "input37:rgb:indicator"          # node present at bind
 inst = RealInst("event25", "DualSense", 0x054c, 0x0ce6,
-                "ps5", "ps5-xbox", "ac:36:1b:70:70:e8", [])
+                "ps5", "ps5-xbox", "ac:36:1b:70:70:e8", "", [])
 check(inst.led == "input37:rgb:indicator", "led bound to the node present at construct")
 check(not led_calls,                       "construct itself does not paint")
 
@@ -168,6 +172,39 @@ check(led_calls == [("input44:rgb:indicator", (0, 128, 0))],
 
 inst.refresh_led()                             # node stable now
 check(len(led_calls) == 1,                 "stable node -> no repaint spam")
+
+# ── Scenario H: dead remapper thread on a steady pad → mode re-asserted ─────
+# A BT blip shorter than one poll interval kills the remapper's grab without
+# the pad ever appearing absent. The reconcile must notice the dead thread
+# (remap_healthy() False) and re-assert the mode, without any menu churn.
+print("Scenario H: dead remapper on a present pad -> re-assert, no menu churn")
+class SickInst(FakeInst):
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.healthy = True
+    def remap_healthy(self):
+        return self.healthy
+
+cm.ControllerInstance = SickInst
+mgr = make_mgr([[dev("event25")], [dev("event25")], [dev("event25")]])
+mgr._poll()
+inst = next(iter(mgr._instances.values()))
+check(mgr._poll() is False,  "healthy steady state -> no rebind trigger")
+check(inst.rebinds == 0,     "healthy -> rebind not called")
+inst.healthy = False                        # grab died between polls
+check(mgr._poll() is False,  "re-assert is not a structural change (no menu churn)")
+check(inst.rebinds == 1,     "dead remapper -> rebind() re-asserts the mode")
+cm.ControllerInstance = FakeInst
+
+# ── Scenario I: two identical uniq-less pads stay two instances ─────────────
+# USB pads on xpad report no serial (uniq empty); with a vendor:product
+# fallback alone, two identical pads would collapse into one instance. The
+# physical attachment point keeps them apart.
+print("Scenario I: identical pads without uniq are kept apart by phys")
+mgr = make_mgr([[dev("event10", uniq="", phys="usb-0000:0c:00.3-2/input0"),
+                 dev("event11", uniq="", phys="usb-0000:0c:00.3-4/input0")]])
+check(mgr._poll() is True,      "two new pads -> changed=True")
+check(len(mgr._instances) == 2, "identical uniq-less pads tracked separately")
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}")
