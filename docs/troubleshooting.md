@@ -42,10 +42,10 @@ The physical controller is still reaching the application through its raw HID no
 
 2. **Is the udev rule installed and udev reloaded?** Since gate v2, pre-existing fds are
    revoked by a driver rebind and new nodes are born gated — but only with
-   `/etc/udev/rules.d/71-controller-manager.rules` in place:
+   `/etc/udev/rules.d/72-controller-manager.rules` in place:
 
    ```bash
-   ls -l /etc/udev/rules.d/71-controller-manager.rules
+   ls -l /etc/udev/rules.d/72-controller-manager.rules
    ```
 
 Confirm the gate state directly (replace the node with your controller's, see the

@@ -16,8 +16,12 @@ sudo install -m 0755 -o root -g root controller-led         /usr/local/bin/contr
 
 # Gate udev rule: gated hidraw nodes must be born inaccessible (MODE 0000,
 # no uaccess ACL), otherwise Steam re-opens them the instant the gate's
-# driver rebind recreates them. Reload rules so it applies without a reboot.
-sudo install -m 0644 -o root -g root 71-controller-manager.rules /etc/udev/rules.d/71-controller-manager.rules
+# driver rebind recreates them. The 72- prefix must outrank the 71-*
+# controller rules from steam-devices (they re-add uaccess for Sony pads).
+# Remove the superseded 71- name from earlier installs, then reload rules
+# so everything applies without a reboot.
+sudo install -m 0644 -o root -g root 72-controller-manager.rules /etc/udev/rules.d/72-controller-manager.rules
+sudo rm -f /etc/udev/rules.d/71-controller-manager.rules
 sudo udevadm control --reload
 
 # Render the sudoers rule for the installing user, validate it in isolation,
