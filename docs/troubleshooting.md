@@ -40,9 +40,13 @@ The physical controller is still reaching the application through its raw HID no
    ls -l /usr/local/bin/controller-hidraw-gate /etc/sudoers.d/controller-hidraw
    ```
 
-2. **Was the application started before the remap?** A process that already holds the
-   hidraw fd keeps it across the later `chmod`. Set the mode first, then start the
-   application — or restart the application.
+2. **Is the udev rule installed and udev reloaded?** Since gate v2, pre-existing fds are
+   revoked by a driver rebind and new nodes are born gated — but only with
+   `/etc/udev/rules.d/71-controller-manager.rules` in place:
+
+   ```bash
+   ls -l /etc/udev/rules.d/71-controller-manager.rules
+   ```
 
 Confirm the gate state directly (replace the node with your controller's, see the
 [verification runbook](../runbooks/verify-remapping.md)):
@@ -72,11 +76,15 @@ done
 # ps5-native = 0 0 255 (blue) ; ps5-xbox = 0 128 0 (green)
 ```
 
-If `multi_intensity` already matches the mode but the **hardware** lightbar does not, the
-driver dropped the output report on the wire (rare, Bluetooth). Re-selecting the mode in the
-tray, or a reconnect, re-asserts it. If the LED value itself is wrong, check that
-`controller-led` is installed and authorised (`/etc/sudoers.d/controller-hidraw`) — without
-it the colour write is a silent no-op.
+If `multi_intensity` already matches the mode but the **hardware** lightbar does not
+(typically completely dark), a raw-HID writer — Steam Input is the usual one — has set the
+pad's lightbar-setup "light out" flag: the firmware then ignores plain colour writes until
+the driver re-probes. Check who holds the pad's hidraw node and see
+[Steam coexistence](decisions/steam-coexistence.md); disabling PlayStation support in the
+Steam client prevents it, and the daemon rearms the pad automatically once the last holder
+exits. If the LED value itself is wrong, check that `controller-led` is installed and
+authorised (`/etc/sudoers.d/controller-hidraw`) — without it the colour write is a silent
+no-op.
 
 ## A remapped controller has working sticks but dead buttons
 

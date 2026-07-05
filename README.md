@@ -32,8 +32,13 @@ This repository is a self-contained tool and a worked example of a Linux input p
   stable per-device identity, so one can be native while the other is remapped.
 - **Launcher-agnostic** — works at the device layer, so every application sees the result
   regardless of how it was started.
-- **Raw HID gating** — closes the double-input gap that an `evdev` grab alone leaves open
+- **Raw HID gating** — closes the double-input gap that an `evdev` grab alone leaves
+  open, including against processes that opened the pad before the gate (Steam Input)
   (see [the hidraw gate decision](docs/decisions/hidraw-gate.md)).
+- **Lightbar status colours (DualSense)** — the pad shows its active mode at a glance:
+  **blue** = native, **green** = Xbox emulation. Games may take the lightbar over while
+  they run; the resting colour returns when they exit (see
+  [Steam coexistence](docs/decisions/steam-coexistence.md)).
 - **Hotplug aware** — controllers may be connected and disconnected at any time; the tray
   menu updates automatically.
 - **No daemon dependencies beyond the standard desktop stack** — `python-evdev`,
@@ -80,9 +85,14 @@ cd controller-manager
 ```
 
 `install.sh` deploys the user-space daemon and service, then installs the root-owned
-hidraw gate helper and its sudoers rule (this step asks for a password). For the full
-procedure with verification and rollback, follow the
+hidraw gate helper, its udev rule and its sudoers rule (this step asks for a password).
+For the full procedure with verification and rollback, follow the
 [installation runbook](runbooks/install.md).
+
+**If you use Steam:** disable *Settings → Controller → PlayStation controller support*
+in the Steam client. Games keep their native DualSense features; without the setting the
+Steam client holds the pad permanently and the lightbar status colour cannot show while
+Steam runs. Details and trade-offs: [Steam coexistence](docs/decisions/steam-coexistence.md).
 
 Enable autostart with the desktop session:
 
@@ -135,6 +145,8 @@ pads, over USB and Bluetooth.
   - [The hidraw gate](docs/decisions/hidraw-gate.md)
   - [Per-device identity](docs/decisions/per-device-identity.md)
   - [Output protocol constraints](docs/decisions/output-protocol-constraints.md)
+  - [Steam coexistence & lightbar ownership](docs/decisions/steam-coexistence.md)
+  - [dbusmenu item model](docs/decisions/tray-menu-model.md)
 - [Troubleshooting / known issues](docs/troubleshooting.md)
 - Runbooks:
   - [Installation](runbooks/install.md)
