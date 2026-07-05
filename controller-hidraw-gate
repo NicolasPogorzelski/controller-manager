@@ -1,49 +1,180 @@
 #!/usr/bin/env bash
-# controller-hidraw-gate — block/restore raw HID access to a SINGLE game
-# controller's /dev/hidraw node, so applications that read controllers directly
-# from /dev/hidraw* cannot see the physical pad while controller-manager remaps
-# it to a virtual pad.
+# controller-hidraw-gate — hide a game controller's raw HID path from
+# applications while controller-manager remaps it to a virtual pad.
 #
-#   controller-hidraw-gate block|restore /dev/hidrawN
+# v2: gating is keyed by the pad's stable HID identity (HID_UNIQ: BT MAC /
+# serial) instead of a volatile /dev/hidrawN node, and it actually revokes
+# access. chmod alone cannot: a process that opened the node BEFORE the gate
+# (Steam Input grabs every pad the moment it connects) keeps a working fd and
+# continues to read input and write output reports — double input, and the
+# DualSense lightbar firmware-latched dark. Therefore:
 #
-# Operating on a specific node (rather than a VID:PID) lets two identical
-# controllers be gated independently.
+#   * gate state = marker file /run/controller-manager/gated/<uniq>
+#     (tmpfs: clears itself on reboot, so a stale gate can never survive)
+#   * a udev rule (71-controller-manager.rules) checks the marker via
+#     `udev-check` and makes gated hidraw nodes be BORN with MODE 0000 and
+#     without the uaccess tag — nothing to race
+#   * block/restore rebind the HID driver, which destroys every open fd on
+#     the old nodes and re-probes the pad (resetting the DualSense lightbar
+#     "light out" latch a previous hidraw writer may have set)
 #
-# Safety: only /dev/hidraw* nodes are ever chmod'd, and only if the node
-# belongs to a HID device of a known controller vendor — so this can't be aimed
-# at unrelated HID hardware (keyboards, fingerprint readers, …). Meant to be
-# invoked through a tightly-scoped NOPASSWD sudoers rule.
+#   controller-hidraw-gate block   <uniq>        # gate + revoke (idempotent)
+#   controller-hidraw-gate restore <uniq>        # ungate (idempotent)
+#   controller-hidraw-gate rearm   <uniq>        # rebind only: reset pad state
+#   controller-hidraw-gate udev-check <devpath>  # for udevd: gated? exit 0/1
+#   controller-hidraw-gate block-node|restore-node /dev/hidrawN   # v1 fallback
+#                                                # for pads without a HID_UNIQ
+#
+# block/restore/rearm rebind only on a real state transition, never on a
+# repeated call — controller-manager re-asserts the gate after the rebind's
+# own device churn, and a rebind on every re-assert would loop forever.
+#
+# Safety: only HID devices of known controller vendors are ever touched, so
+# this can't be aimed at unrelated HID hardware (keyboards, fingerprint
+# readers, …). Meant to be invoked through a tightly-scoped NOPASSWD sudoers
+# rule; udev-check is called directly by udevd (already root).
 
 set -euo pipefail
 
-# Controller vendors whose hidraw nodes we are willing to gate (hex, upper-case):
+MARKER_DIR=/run/controller-manager/gated
+
+# Controller vendors we are willing to gate (hex, upper-case):
 # Microsoft, Sony, Valve, Nintendo, 8BitDo, Hori.
 GAMING_VENDORS=( 045E 054C 28DE 057E 2DC8 0F0D )
 
 action="${1:-}"
-node="${2:-}"
+arg="${2:-}"
+
+die()  { echo "$*" >&2; exit 3; }
+
+# HID_ID=BUS:0000VVVV:0000PPPP -> the 4-digit vendor, upper-case.
+vendor_of() {
+  sed -n 's/^HID_ID=[0-9A-Fa-f]*:0*\([0-9A-Fa-f]\{4\}\):.*/\1/p' "$1/uevent" \
+    | tr 'a-f' 'A-F'
+}
+
+vendor_ok() {
+  local vid; vid="$(vendor_of "$1")"
+  local v; for v in "${GAMING_VENDORS[@]}"; do [[ "$v" == "$vid" ]] && return 0; done
+  echo "vendor '$vid' of $1 not a gaming vendor — refused" >&2
+  return 1
+}
+
+# Locate the sysfs HID device whose HID_UNIQ matches; empty result if absent
+# (a disconnected pad is a legal target for restore — the marker still counts).
+find_hid_by_uniq() {
+  local dev
+  for dev in /sys/bus/hid/devices/*; do
+    [[ -r "$dev/uevent" ]] || continue
+    grep -qx "HID_UNIQ=$1" "$dev/uevent" || continue
+    echo "$dev"; return 0
+  done
+  return 1
+}
+
+# chmod this device's current /dev/hidrawN nodes (belt & suspenders next to
+# the udev rule, and the only cover for nodes that predate the marker).
+chmod_nodes() {
+  local dev="$1" mode="$2" h
+  for h in "$dev"/hidraw/hidraw*; do
+    [[ -e "$h" ]] && chmod "$mode" "/dev/$(basename "$h")"
+  done
+}
+
+# Detach + reattach the kernel driver: every open fd on the device's hidraw
+# and event nodes dies, the driver re-probes (fresh DualSense lightbar setup),
+# and the nodes reappear renumbered — born gated or not per the udev rule.
+rebind() {
+  local dev="$1" name drv
+  name="$(basename "$dev")"
+  drv="$(readlink -f "$dev/driver" 2>/dev/null)" || { echo "no driver bound to $name"; return 0; }
+  echo "$name" > "$drv/unbind"
+  echo "$name" > "$drv/bind"
+}
 
 case "$action" in
-  block|restore) ;;
-  *) echo "usage: $(basename "$0") block|restore /dev/hidrawN" >&2; exit 2 ;;
+
+  block|restore|rearm)
+    # uniq: MAC / serial as reported in HID_UNIQ. Conservative charset so the
+    # marker filename can never escape MARKER_DIR or carry shell surprises.
+    [[ "$arg" =~ ^[A-Za-z0-9:._-]{1,64}$ ]] || die "bad uniq '$arg'"
+    marker="$MARKER_DIR/$arg"
+    dev="$(find_hid_by_uniq "$arg" || true)"
+
+    if [[ "$action" == block ]]; then
+      [[ -n "$dev" ]] || die "no HID device with uniq '$arg'"
+      vendor_ok "$dev"
+      install -d -m 0700 "$MARKER_DIR"
+      if [[ -e "$marker" ]]; then
+        chmod_nodes "$dev" 000            # re-assert only; NO rebind (loop!)
+        echo "controller-hidraw-gate: block $arg (already gated)"
+        exit 0
+      fi
+      touch "$marker"
+      chmod_nodes "$dev" 000              # cover pre-marker nodes immediately
+      rebind "$dev"                       # revoke open fds; new nodes born gated
+      echo "controller-hidraw-gate: block $arg (gated + rebound)"
+
+    elif [[ "$action" == restore ]]; then
+      if [[ -e "$marker" ]]; then
+        rm -f "$marker"
+        if [[ -n "$dev" ]]; then
+          vendor_ok "$dev"
+          rebind "$dev"                   # nodes reborn with default perms/ACL
+        fi
+        echo "controller-hidraw-gate: restore $arg (ungated)"
+      else
+        # No marker (already native). Heal leftover 000 perms from the v1
+        # chmod-only gate without a rebind: re-run udev rules so default
+        # permissions and the seat ACL are reapplied.
+        if [[ -n "$dev" ]]; then
+          vendor_ok "$dev"
+          chmod_nodes "$dev" 0600
+          udevadm trigger --action=change "$dev"/hidraw/hidraw* 2>/dev/null || true
+        fi
+        echo "controller-hidraw-gate: restore $arg (was not gated)"
+      fi
+
+    else  # rearm: reset pad state (lightbar latch) without touching the gate
+      [[ -n "$dev" ]] || { echo "rearm $arg: device absent, nothing to do"; exit 0; }
+      vendor_ok "$dev"
+      rebind "$dev"
+      echo "controller-hidraw-gate: rearm $arg (rebound)"
+    fi
+    exit 0
+    ;;
+
+  udev-check)
+    # Called by udevd (PROGRAM=) for every new hidraw node of a gaming vendor:
+    # exit 0 = the parent HID device is gated -> the rule applies MODE 0000.
+    # Must stay dependency-free and fast; udevd runs it on the hotplug path.
+    ue="/sys$arg/device/uevent"
+    [[ -r "$ue" ]] || exit 1
+    uniq="$(sed -n 's/^HID_UNIQ=//p' "$ue")"
+    [[ -n "$uniq" && -e "$MARKER_DIR/$uniq" ]] || exit 1
+    exit 0
+    ;;
+
+  block-node|restore-node)
+    # v1 semantics for pads that expose no HID_UNIQ: chmod one specific node.
+    # Cannot revoke already-open fds — best effort only.
+    node="$arg"
+    [[ "$node" =~ ^/dev/hidraw[0-9]+$ ]] || die "bad node '$node'"
+    [[ -e "$node" ]] || { echo "$node absent, nothing to do"; exit 0; }
+    sysdev="/sys/class/hidraw/$(basename "$node")/device"
+    [[ -r "$sysdev/uevent" ]] || die "cannot read $sysdev/uevent"
+    vendor_ok "$sysdev"
+    mode=000
+    [[ "$action" == restore-node ]] && mode=666
+    chmod "$mode" "$node"
+    echo "controller-hidraw-gate: $action $node -> $mode"
+    exit 0
+    ;;
+
+  *)
+    echo "usage: $(basename "$0") block|restore|rearm <uniq>" >&2
+    echo "       $(basename "$0") udev-check <devpath>" >&2
+    echo "       $(basename "$0") block-node|restore-node /dev/hidrawN" >&2
+    exit 2
+    ;;
 esac
-
-[[ "$node" =~ ^/dev/hidraw[0-9]+$ ]] || { echo "bad node '$node'" >&2; exit 2; }
-# Node already gone (e.g. controller unplugged) — nothing to do.
-[[ -e "$node" ]] || { echo "$node absent, nothing to do"; exit 0; }
-
-name="$(basename "$node")"
-ue="/sys/class/hidraw/$name/device/uevent"
-[[ -r "$ue" ]] || { echo "cannot read $ue" >&2; exit 3; }
-
-# HID_ID=BUS:0000VVVV:0000PPPP  ->  extract the 4-digit vendor.
-vid="$(sed -n 's/^HID_ID=[0-9A-Fa-f]*:0*\([0-9A-Fa-f]\{4\}\):.*/\1/p' "$ue" | tr 'a-f' 'A-F')"
-ok=0
-for v in "${GAMING_VENDORS[@]}"; do [[ "$v" == "$vid" ]] && ok=1; done
-[[ $ok -eq 1 ]] || { echo "vendor '$vid' of $node not a gaming vendor — refused" >&2; exit 3; }
-
-mode=000
-[[ "$action" == restore ]] && mode=666
-chmod "$mode" "$node"
-echo "controller-hidraw-gate: $action $node (vendor $vid) -> $mode"
-exit 0
