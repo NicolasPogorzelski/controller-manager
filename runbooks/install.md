@@ -27,6 +27,8 @@ cd controller-manager
 2. **Root space** (asks for a password):
    - `controller-hidraw-gate` → `/usr/local/bin/controller-hidraw-gate` (root, `0755`)
    - `controller-led` → `/usr/local/bin/controller-led` (root, `0755`)
+   - `71-controller-manager.rules` → `/etc/udev/rules.d/` (root, `0644`), then
+     `udevadm control --reload` — gated hidraw nodes must be born inaccessible
    - `controller-hidraw.sudoers` → `/etc/sudoers.d/controller-hidraw` (root, `0440`)
    - `visudo -c` to validate the sudoers files
 3. **Service**: `daemon-reload` and restart, then prints the active state.
@@ -36,6 +38,10 @@ Enable autostart with the session:
 ```bash
 systemctl --user enable --now controller-manager.service
 ```
+
+If Steam is used on the machine, disable **Settings → Controller → PlayStation
+controller support** in the Steam client — see
+[Steam coexistence](../docs/decisions/steam-coexistence.md) for why and what it costs.
 
 ## Verification
 
@@ -72,7 +78,9 @@ rm -f ~/.local/bin/controller-manager.py \
 systemctl --user daemon-reload
 
 # Remove root-space files
-sudo rm -f /usr/local/bin/controller-hidraw-gate /etc/sudoers.d/controller-hidraw
+sudo rm -f /usr/local/bin/controller-hidraw-gate /etc/sudoers.d/controller-hidraw \
+           /etc/udev/rules.d/71-controller-manager.rules
+sudo udevadm control --reload
 ```
 
 The configuration at `~/.config/controller-modes.json` is left in place; delete it too for
