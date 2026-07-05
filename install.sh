@@ -10,9 +10,15 @@ echo "==> User-space (controller-manager + service)"
 install -D -m 0755 controller-manager.py       "$HOME/.local/bin/controller-manager.py"
 install -D -m 0644 controller-manager.service  "$HOME/.config/systemd/user/controller-manager.service"
 
-echo "==> Root-space (hidraw gate + led helper + sudoers) — sudo required"
+echo "==> Root-space (hidraw gate + led helper + udev rule + sudoers) — sudo required"
 sudo install -m 0755 -o root -g root controller-hidraw-gate /usr/local/bin/controller-hidraw-gate
 sudo install -m 0755 -o root -g root controller-led         /usr/local/bin/controller-led
+
+# Gate udev rule: gated hidraw nodes must be born inaccessible (MODE 0000,
+# no uaccess ACL), otherwise Steam re-opens them the instant the gate's
+# driver rebind recreates them. Reload rules so it applies without a reboot.
+sudo install -m 0644 -o root -g root 71-controller-manager.rules /etc/udev/rules.d/71-controller-manager.rules
+sudo udevadm control --reload
 
 # Render the sudoers rule for the installing user, validate it in isolation,
 # then install it. Validating before placement avoids leaving a broken file in

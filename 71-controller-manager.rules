@@ -1,0 +1,17 @@
+# controller-manager hidraw gate (see controller-hidraw-gate).
+#
+# While a pad is gated (marker under /run/controller-manager/gated), its
+# hidraw nodes must be BORN inaccessible: the gate rebinds the HID driver to
+# revoke existing fds, and without this rule the reborn node would be open
+# for a moment — long enough for Steam's udev hotplug to reopen it.
+#
+# Filename 71-: after 70-uaccess.rules assigns the uaccess tag, before
+# 73-seat-late.rules turns that tag into a seat-user ACL. Removing the tag
+# here prevents the ACL grant, which would otherwise let the desktop user's
+# processes (Steam!) straight through MODE 0000.
+#
+# KERNELS matches the parent HID device name (BUS:VVVV:PPPP.NNNN) so the
+# helper only ever runs for Sony/Microsoft pads, not for every HID device.
+ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="????:054C:*|????:045E:*", \
+  PROGRAM=="/usr/local/bin/controller-hidraw-gate udev-check %p", \
+  MODE="0000", GROUP="root", TAG-="uaccess"
