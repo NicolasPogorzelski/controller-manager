@@ -103,16 +103,16 @@ else
 fi
 
 # =============================================================================
-# Check 7: reconcile logic unit test (identity keying / rebind / grace)
+# Check 7: unit tests (reconcile logic, dbusmenu id model, …)
 # =============================================================================
-echo "Check 7: reconcile unit test"
+echo "Check 7: unit tests"
 
-if [[ -f "${REPO_ROOT}/tests/test_reconcile.py" ]]; then
-    if ! python3 "${REPO_ROOT}/tests/test_reconcile.py" >/dev/null 2>&1; then
-        echo "  tests/test_reconcile.py: FAILED"
+while read -r testfile; do
+    if ! python3 "${testfile}" >/dev/null 2>&1; then
+        echo "  ${testfile#"${REPO_ROOT}"/}: FAILED"
         echo "x" >> "${ERROR_LOG}"
     fi
-fi
+done < <(find "${REPO_ROOT}/tests" -name "test_*.py" -type f 2>/dev/null | sort)
 
 # =============================================================================
 # Result

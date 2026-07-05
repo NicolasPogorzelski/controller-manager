@@ -155,20 +155,38 @@ def hidraw_for_event(ev_path):
     nodes = glob.glob(os.path.join(hid_dir, "hidraw", "hidraw*"))
     return sorted(f"/dev/{os.path.basename(n)}" for n in nodes)
 
-def hidraw_gate(action, nodes):
-    """action: 'block' | 'restore'; nodes: list of /dev/hidrawN.
-    No-op for an empty list or when the helper/sudo rule is missing."""
-    if not nodes or not os.path.exists(GATE_BIN):
+def hidraw_gate(action, uniq, nodes):
+    """action: 'block' | 'restore' | 'rearm', keyed by the pad's stable HID
+    identity (uniq: BT MAC / serial). The v2 helper actually revokes access —
+    a plain chmod cannot: a process that opened the node before the gate
+    (Steam Input grabs every pad on connect) keeps a working fd. The helper
+    rebinds the kernel driver on a state transition, which kills every open
+    fd and re-probes the pad (resetting the DualSense lightbar latch); the
+    device nodes RENUMBER when that happens, so callers must re-resolve them
+    afterwards (ControllerInstance._refresh_nodes). Pads without a uniq fall
+    back to the v1 per-node chmod (best effort, no revocation). No-op when
+    the helper/sudo rule is missing."""
+    if not os.path.exists(GATE_BIN):
         return
-    for node in nodes:
+    if uniq:
+        cmds = [["sudo", "-n", GATE_BIN, action, uniq]]
+    else:
+        legacy = {"block": "block-node", "restore": "restore-node"}.get(action)
+        if not legacy or not nodes:
+            return
+        cmds = [["sudo", "-n", GATE_BIN, legacy, node] for node in nodes]
+    for cmd in cmds:
         try:
+            # timeout 10: a driver rebind (unbind + re-probe) is slower than
+            # the old chmod; still far below anything a user would notice as
+            # a hang, and generous enough for a busy USB/BT stack.
             subprocess.run(
-                ["sudo", "-n", GATE_BIN, action, node],
-                timeout=5, check=False,
+                cmd, timeout=10, check=False,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         except Exception as ex:
-            print(f"hidraw_gate: {action} {node} failed: {ex}", file=sys.stderr)
+            print(f"hidraw_gate: {' '.join(cmd[2:])} failed: {ex}",
+                  file=sys.stderr)
 
 
 def led_indicator_for_event(ev_path):
@@ -177,6 +195,8 @@ def led_indicator_for_event(ev_path):
     exposes the lightbar as a multicolor LED; driving it there lets the kernel
     do the USB/BT output-report framing, so the colour survives BT reconnects —
     unlike raw hidraw writes, which race the driver and get dropped over BT."""
+    if not ev_path:      # instance mid-rebind: node not re-resolved yet
+        return None
     base = f"/sys/class/input/{os.path.basename(ev_path)}/device"
     if not os.path.exists(base):
         return None
@@ -198,6 +218,98 @@ def led_set(led, rgb):
         )
     except Exception as ex:
         print(f"led_set: {led} failed: {ex}", file=sys.stderr)
+
+
+def hidraw_holders(nodes):
+    """PIDs of other processes holding an open fd on any of the given
+    /dev/hidrawN nodes. Only same-user processes are visible without
+    privileges — which is exactly the population that matters here (Steam,
+    games, launchers all run as the desktop user)."""
+    holders = set()
+    if not nodes:
+        return holders
+    want = set(nodes)
+    me = str(os.getpid())
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit() and p != me]
+    except OSError:
+        return holders
+    for pid in pids:
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            for fd in os.listdir(fd_dir):
+                try:
+                    if os.readlink(f"{fd_dir}/{fd}") in want:
+                        holders.add(int(pid))
+                        break
+                except OSError:      # fd closed while we looked
+                    continue
+        except OSError:              # process exited / not ours
+            continue
+    return holders
+
+
+# ── Controller discovery ─────────────────────────────────────────────────────
+
+def ident_of(vendor, product, uniq, phys=""):
+    """Stable identity of a physical pad across reconnects and node churn:
+    the BT MAC / serial when the pad reports one; else the physical
+    attachment point (distinguishes two IDENTICAL uniq-less pads, e.g. two
+    USB Xbox pads on xpad — stable within a session, though not across a
+    port change); else vendor:product as the last resort."""
+    if uniq:
+        return uniq
+    if phys:
+        return f"phys:{phys}"
+    return f"{vendor:04x}:{product:04x}"
+
+
+def scan_controllers(exclude_paths=frozenset()):
+    """All connected real controllers as list of dicts. Shared by the
+    manager's poll and by a single instance re-resolving its nodes after a
+    gate transition, so both apply the exact same notion of 'a controller'."""
+    result = []
+    for path in evdev.list_devices():
+        if path in exclude_paths:
+            continue
+        try:
+            dev = evdev.InputDevice(path)
+        except Exception:
+            continue
+        try:
+            if dev.name in VIRTUAL_NAMES:
+                continue
+            phys = dev.phys or ""
+            # Software-emulated pads: Sunshine (inputtino) creates virtual
+            # DualSense/Xbox pads over uhid with a REAL Sony/Microsoft VID for
+            # its stream clients. Adopting one would grab and remap a stream
+            # client's own input. They are recognisable by their synthetic
+            # phys and their '(virtual)' kernel device name.
+            if phys == "INPUTTINO_BT_LINK" or "(virtual)" in dev.name:
+                continue
+            family = VENDOR_FAMILY.get(dev.info.vendor)
+            if not family:
+                continue
+            # Must be an actual gamepad — excludes headset / motion-sensor /
+            # touchpad / consumer-control nodes that share the same vendor id.
+            keys = dev.capabilities().get(e.EV_KEY, [])
+            if e.BTN_GAMEPAD not in keys and e.BTN_SOUTH not in keys:
+                continue
+            name = CONTROLLER_NAMES.get(
+                (dev.info.vendor, dev.info.product), dev.name)
+            result.append({
+                "path":    path,
+                "name":    name,
+                "vendor":  dev.info.vendor,
+                "product": dev.info.product,
+                "family":  family,
+                "uniq":    dev.uniq or "",
+                "phys":    phys,
+                "hidraw":  hidraw_for_event(path),
+            })
+        finally:
+            dev.close()
+    return result
 
 
 # ── Remapper thread ──────────────────────────────────────────────────────────
@@ -303,7 +415,8 @@ class Remapper(threading.Thread):
 # ── Controller instance ──────────────────────────────────────────────────────
 
 class ControllerInstance:
-    def __init__(self, path, name, vendor, product, family, mode, uniq, hidraw):
+    def __init__(self, path, name, vendor, product, family, mode, uniq, phys,
+                 hidraw):
         self.path    = path
         self.name    = name
         self.vendor  = vendor
@@ -311,10 +424,11 @@ class ControllerInstance:
         self.family  = family
         self.mode    = mode
         self.uniq    = uniq       # stable per-device id (BT MAC / serial)
-        # Stable key across reconnects: the BT MAC / serial, else vendor:product.
-        # A reconnect changes the evdev path but not this, so we can recognise the
-        # same physical pad and rebind it instead of churning the tray menu.
-        self.ident   = uniq or f"{vendor:04x}:{product:04x}"
+        self.phys    = phys       # physical attachment (USB port / BT adapter)
+        # Stable key across reconnects: a reconnect changes the evdev path but
+        # not this, so we can recognise the same physical pad and rebind it
+        # instead of churning the tray menu.
+        self.ident   = ident_of(vendor, product, uniq, phys)
         self.hidraw  = hidraw     # list of /dev/hidrawN (may be empty)
         # DualSense lightbar via the kernel LED class (…:rgb:indicator); None for
         # Xbox pads or when the node can't be resolved. Re-resolved per instance,
@@ -322,6 +436,7 @@ class ControllerInstance:
         self.led     = led_indicator_for_event(path) if family == "ps5" else None
         self._remap  = None
         self._gone_since = None   # monotonic time first seen absent, for grace
+        self._foreign_holder = False   # someone held our hidraw last tick
 
     def display_name(self):
         return self.name
@@ -356,6 +471,28 @@ class ControllerInstance:
         if led and led != self.led:
             self._apply_led()
 
+    def watch_holders(self):
+        """Resting-colour policy for ps5-native. While some application holds
+        the pad's raw HID path (Steam, a game with native DualSense support),
+        the lightbar is legitimately theirs — hands off. When the LAST holder
+        disappears, the pad may be left with the lightbar firmware-latched
+        dark (a raw-HID writer can set the 'light out' setup flag; kernel LED
+        writes then change nothing until the driver re-probes). So on that
+        transition: rearm (driver rebind → fresh lightbar setup), re-resolve
+        our renumbered nodes and repaint the resting blue. Remap modes need
+        none of this — there the gate guarantees exclusive LED ownership.
+        Called from the monitor tick, outside the manager lock (shells out)."""
+        if self.family != "ps5" or self._target_for_mode() is not None:
+            return
+        if hidraw_holders(self.hidraw):
+            self._foreign_holder = True
+            return
+        if self._foreign_holder:
+            self._foreign_holder = False
+            hidraw_gate("rearm", self.uniq, self.hidraw)
+            self._refresh_nodes()
+            self._apply_led()
+
     # ── mode / lifecycle ──────────────────────────────────────────────────────
 
     def _target_for_mode(self):
@@ -366,7 +503,12 @@ class ControllerInstance:
         return None
 
     def apply_mode(self):
-        """Stop existing remapper, start new one if needed, update LED."""
+        """Stop existing remapper, transition the hidraw gate, start a new
+        remapper if needed, update LED. A gate state transition rebinds the
+        kernel driver (to revoke foreign fds and reset the lightbar latch),
+        which renumbers this pad's device nodes — so re-resolve them before
+        grabbing, and never grab before gating (the rebind would kill the
+        grab again)."""
         if self._remap:
             old = self._remap
             old.stop()
@@ -374,26 +516,51 @@ class ControllerInstance:
             self._remap = None
 
         target = self._target_for_mode()
-        if target:
-            # Hide this pad's raw HID node from applications before the remapper
-            # takes over (the evdev grab alone does not cover hidraw).
-            hidraw_gate("block", self.hidraw)
+        # Hide this pad's raw HID path from applications before the remapper
+        # takes over (the evdev grab alone does not cover hidraw) — or reopen
+        # it when returning to native.
+        hidraw_gate("block" if target else "restore", self.uniq, self.hidraw)
+        self._refresh_nodes()
+
+        if target and self.path:
             bmap = QUIRK_BUTTON_MAP.get((self.vendor, self.product))
             r = Remapper(self.path, target, bmap)
             r.start()
             self._remap = r
-        else:
-            # Native mode: make sure raw HID access is open again.
-            hidraw_gate("restore", self.hidraw)
 
         self._apply_led()
+
+    def _refresh_nodes(self, timeout=3.0):
+        """Re-resolve path/hidraw/LED bindings after a gate transition tore
+        the pad's kernel nodes down and recreated them renumbered. Polls
+        briefly because the re-probe takes a moment; when nothing was rebound
+        the first scan simply confirms the existing binding. If the pad does
+        not come back in time the stale path is dropped — the monitor's
+        reconcile rebinds when it reappears."""
+        deadline = time.monotonic() + timeout
+        while True:
+            for d in scan_controllers():
+                if ident_of(d["vendor"], d["product"],
+                            d["uniq"], d["phys"]) == self.ident:
+                    self.path   = d["path"]
+                    self.name   = d["name"]
+                    self.hidraw = d["hidraw"]
+                    self.led    = (led_indicator_for_event(self.path)
+                                   if self.family == "ps5" else None)
+                    return
+            if time.monotonic() >= deadline:
+                self.path = None
+                return
+            time.sleep(0.1)
 
     def rebind(self, path, name, hidraw):
         """Same physical pad reappeared on a new evdev/hidraw node after a (BT)
         reconnect. Refresh the node bindings and restart the remapper in place —
         the instance (and thus its tray-menu entry) is kept, so the host sees no
-        structural change."""
-        hidraw_gate("restore", self.hidraw)   # release the old node (usually gone)
+        structural change. Deliberately NO gate 'restore' here: the gate is
+        keyed by the pad's stable identity, so staying gated across a reconnect
+        is exactly right — the reborn nodes were already born gated (udev
+        rule), and apply_mode re-asserts the gate idempotently."""
         self.path   = path
         self.name   = name
         self.hidraw = hidraw
@@ -403,13 +570,21 @@ class ControllerInstance:
     def virtual_path(self):
         return self._remap.virtual_path if self._remap else None
 
+    def remap_healthy(self):
+        """False when the current mode calls for a remapper but none is
+        running (thread died: lost grab after a sub-poll BT blip, or the
+        grab failed outright). Native modes are trivially healthy."""
+        if self._target_for_mode() is None:
+            return True
+        return self._remap is not None and self._remap.is_alive()
+
     def stop(self):
         if self._remap:
             self._remap.stop()
             self._remap = None
-        # Restore raw HID access whenever we stop managing this pad
-        # (disconnect or shutdown), so a blocked node never lingers.
-        hidraw_gate("restore", self.hidraw)
+        # Ungate whenever we stop managing this pad (disconnect or shutdown),
+        # so a gated pad never lingers invisible to every application.
+        hidraw_gate("restore", self.uniq, self.hidraw)
 
 
 # ── Controller Manager ───────────────────────────────────────────────────────
@@ -448,46 +623,13 @@ class ControllerManager:
         return paths
 
     def _scan(self):
-        """Return a list of dicts describing connected real controllers."""
-        result = []
-        virtual = self._virtual_paths()
-        for path in evdev.list_devices():
-            if path in virtual:
-                continue
-            try:
-                dev = evdev.InputDevice(path)
-            except Exception:
-                continue
-            try:
-                if dev.name in VIRTUAL_NAMES:
-                    continue
-                family = VENDOR_FAMILY.get(dev.info.vendor)
-                if not family:
-                    continue
-                # Must be an actual gamepad — excludes headset / motion-sensor /
-                # touchpad / consumer-control nodes that share the same vendor id.
-                keys = dev.capabilities().get(e.EV_KEY, [])
-                if e.BTN_GAMEPAD not in keys and e.BTN_SOUTH not in keys:
-                    continue
-                name = CONTROLLER_NAMES.get(
-                    (dev.info.vendor, dev.info.product), dev.name)
-                result.append({
-                    "path":    path,
-                    "name":    name,
-                    "vendor":  dev.info.vendor,
-                    "product": dev.info.product,
-                    "family":  family,
-                    "uniq":    dev.uniq or "",
-                    "hidraw":  hidraw_for_event(path),
-                })
-            finally:
-                dev.close()
-        return result
+        """Connected real controllers, minus our own virtual output devices."""
+        return scan_controllers(exclude_paths=self._virtual_paths())
 
     @staticmethod
     def _ident(d):
         """Stable identity of a scanned controller — matches ControllerInstance.ident."""
-        return d["uniq"] or f'{d["vendor"]:04x}:{d["product"]:04x}'
+        return ident_of(d["vendor"], d["product"], d["uniq"], d["phys"])
 
     def _poll(self):
         """One scan/reconcile pass; returns True if the *set* of controllers
@@ -514,14 +656,16 @@ class ControllerManager:
                 inst._gone_since = None             # present again
                 if d["path"] != inst.path:          # reconnected on a new node
                     inst.rebind(d["path"], d["name"], d["hidraw"])
-                elif was_gone:
-                    # Reconnected on the *reused* evdev path: same eventX number,
-                    # but a fresh device underneath (BT re-pair / power-cycle). The
-                    # old remapper's grab died with the disconnect and the firmware
-                    # reset the lightbar, yet the path is unchanged so the check
-                    # above misses it — the pad would come back un-remapped and on
-                    # the wrong colour until a manual switch. Re-assert the whole
-                    # mode: restart the remapper, re-gate the hidraw node, repaint.
+                elif was_gone or not inst.remap_healthy():
+                    # Two ways a pad can look unchanged yet be broken underneath:
+                    #  * reconnected on the *reused* evdev path (BT re-pair /
+                    #    power-cycle): same eventX number, fresh device below —
+                    #    the old grab died and the firmware reset the lightbar;
+                    #  * a BT blip shorter than one poll killed the remapper's
+                    #    grab without the pad ever appearing absent (the thread
+                    #    is dead but the mode still wants a remap).
+                    # Both: re-assert the whole mode — restart the remapper,
+                    # re-gate the hidraw node, repaint the lightbar.
                     inst.rebind(d["path"], d["name"], d["hidraw"])
             # Add genuinely new controllers.
             for ident, d in found.items():
@@ -536,18 +680,21 @@ class ControllerManager:
                     mode = default
                 inst = ControllerInstance(
                     d["path"], d["name"], d["vendor"], d["product"],
-                    d["family"], mode, d["uniq"], d["hidraw"])
+                    d["family"], mode, d["uniq"], d["phys"], d["hidraw"])
                 inst.apply_mode()
                 self._instances[ident] = inst
                 changed = True
         if changed:
             GLib.idle_add(self._on_change)
-        # LED self-heal, outside the lock (led_set may shell out to sudo, and we
-        # must not stall set_mode/get_instances behind it): a pad rebound while
-        # its :rgb:indicator node still lagged gets its colour applied on a later
-        # tick instead of being stuck on the firmware-default blue.
+        # LED self-heal + resting-colour watch, outside the lock (both may
+        # shell out to sudo, and we must not stall set_mode/get_instances
+        # behind that): a pad rebound while its :rgb:indicator node still
+        # lagged gets its colour applied on a later tick, and a ps5-native pad
+        # whose last raw-HID holder (Steam / a game) just exited gets rearmed
+        # and repainted to the resting blue.
         for inst in self.get_instances():
             inst.refresh_led()
+            inst.watch_holders()
         return changed
 
     def _monitor(self):
@@ -585,6 +732,23 @@ class DbusmenuServer(dbus.service.Object):
         self._mgr      = manager
         self._on_quit  = on_quit
         self._revision = 1
+        # Cached menu model. Every dbusmenu call (GetLayout, GetGroupProperties,
+        # GetProperty, Event) answers from this one snapshot, so within a
+        # revision a host can never observe two different id→item mappings —
+        # rebuilding per call let the instance list shift between a host's
+        # GetLayout and its Event, misrouting the click.
+        self._items    = []    # ordered [(id, props-dict)], Quit last
+        self._lookup   = {}    # id → (controller ident, mode) for radio items
+        self._sig      = None  # structural signature of the cached model
+        # Item ids come from this counter and are NEVER reused for a different
+        # item. The GNOME appindicator host caches item properties per id and
+        # does not refresh them when a layout change reuses an id for a
+        # structurally different item (separator→radio after a controller
+        # connects), leaving entries stuck disabled. Fresh ids per structural
+        # change force the host to treat them as new items and fetch fresh
+        # properties. Display-only changes keep their ids and are pushed as
+        # ItemsPropertiesUpdated deltas instead.
+        self._next_id  = 1
 
     # ── menu building ────────────────────────────────────────────────────────
 
@@ -603,79 +767,117 @@ class DbusmenuServer(dbus.service.Object):
             return inst.name
         return f"{inst.name} {peers.index(inst) + 1}"
 
-    def _item_props(self):
-        """Single source of truth for the menu: ordered list of (id, props).
-        Used by GetLayout, GetGroupProperties and GetProperty so a host can
-        never see a different id→props mapping depending on which call it uses
-        (a mismatch desyncs the host's menu model and misroutes clicks)."""
-        items  = []
-        id_    = 1
+    def _semantic_items(self):
+        """The menu as plain (kind, …) tuples, before ids and dbus types:
+        ('info', label) | ('header', ident, label)
+        | ('radio', ident, mode, label, checked) | ('sep',)."""
         instances = self._mgr.get_instances()
-
+        sem = []
         if not instances:
-            items.append((id_, {
-                "label":   dbus.String("No controller connected"),
-                "enabled": dbus.Boolean(False),
-            }))
-            id_ += 1
+            sem.append(("info", "No controller connected"))
         else:
             for inst in instances:
-                items.append((id_, {
-                    "label":   dbus.String(self._inst_label(inst, instances)),
-                    "enabled": dbus.Boolean(False),
-                }))
-                id_ += 1
-
-                modes = MODES_FOR_FAMILY.get(inst.family, [])
-                for mode in modes:
-                    items.append((id_, {
-                        "label":        dbus.String(MODE_LABELS[mode]),
-                        "enabled":      dbus.Boolean(True),
-                        "toggle-type":  dbus.String("radio"),
-                        "toggle-state": dbus.Int32(1 if inst.mode == mode else 0),
-                    }))
-                    id_ += 1
-
+                sem.append(("header", inst.ident,
+                            self._inst_label(inst, instances)))
+                for mode in MODES_FOR_FAMILY.get(inst.family, []):
+                    sem.append(("radio", inst.ident, mode,
+                                MODE_LABELS[mode], inst.mode == mode))
                 if inst is not instances[-1]:
-                    items.append((id_, {"type": dbus.String("separator")}))
-                    id_ += 1
+                    sem.append(("sep",))
+        sem.append(("sep",))   # final separator before Quit
+        return sem
 
-        # Final separator + Quit
-        items.append((id_, {"type": dbus.String("separator")}))
-        items.append((QUIT_ID, {"label": dbus.String("Quit"),
-                                "enabled": dbus.Boolean(True)}))
-        return items
+    @staticmethod
+    def _props_for(entry):
+        kind = entry[0]
+        if kind == "info":
+            return {"label":   dbus.String(entry[1]),
+                    "enabled": dbus.Boolean(False)}
+        if kind == "header":
+            return {"label":   dbus.String(entry[2]),
+                    "enabled": dbus.Boolean(False)}
+        if kind == "radio":
+            return {"label":        dbus.String(entry[3]),
+                    "enabled":      dbus.Boolean(True),
+                    "toggle-type":  dbus.String("radio"),
+                    "toggle-state": dbus.Int32(1 if entry[4] else 0)}
+        return {"type": dbus.String("separator")}
 
-    def _build_items(self):
-        """Flat menu: header + radio items per controller, then Quit."""
-        return [self._make_item(id_, props) for id_, props in self._item_props()]
+    @staticmethod
+    def _structure_sig(sem):
+        """What defines an item's KIND and click target. Labels and
+        toggle-state are volatile display state — excluded here, so they
+        update in place via ItemsPropertiesUpdated without an id change."""
+        sig = []
+        for entry in sem:
+            if entry[0] == "radio":
+                sig.append(("radio", entry[1], entry[2]))
+            elif entry[0] == "header":
+                sig.append(("header", entry[1]))
+            else:
+                sig.append((entry[0],))
+        return tuple(sig)
 
-    def _build_lookup(self):
-        """id → (controller_ident, mode) for click handling."""
-        lookup = {}
-        id_ = 1
-        for inst in self._mgr.get_instances():
-            id_ += 1   # skip header
-            for mode in MODES_FOR_FAMILY.get(inst.family, []):
-                lookup[id_] = (inst.ident, mode)
-                id_ += 1
-            id_ += 1   # separator
-        return lookup
+    def _rebuild(self):
+        """Sync the cached model to the current controller state and emit the
+        matching dbusmenu signal (LayoutUpdated on structural change,
+        ItemsPropertiesUpdated for display-state deltas). Main loop only."""
+        sem = self._semantic_items()
+        sig = self._structure_sig(sem)
+
+        if sig != self._sig:
+            items, lookup = [], {}
+            for entry in sem:
+                if self._next_id == QUIT_ID:   # never hand out the Quit id
+                    self._next_id += 1
+                id_ = self._next_id
+                self._next_id += 1
+                items.append((id_, self._props_for(entry)))
+                if entry[0] == "radio":
+                    lookup[id_] = (entry[1], entry[2])
+            # Quit is the one constant item: same kind, label and props
+            # forever, so its well-known id is safe to keep.
+            items.append((QUIT_ID, {"label":   dbus.String("Quit"),
+                                    "enabled": dbus.Boolean(True)}))
+            self._items, self._lookup, self._sig = items, lookup, sig
+            self._revision += 1
+            self.LayoutUpdated(dbus.UInt32(self._revision), dbus.Int32(0))
+            return
+
+        # Same structure: positions align pairwise with the cached items
+        # (Quit, cached last, has no semantic entry — zip stops before it).
+        updated = []
+        for (id_, props), entry in zip(self._items, sem):
+            new = self._props_for(entry)
+            delta = {k: v for k, v in new.items() if props.get(k) != v}
+            if delta:
+                props.update(delta)
+                updated.append((id_, delta))
+        if updated:
+            self.ItemsPropertiesUpdated(
+                dbus.Array(
+                    [dbus.Struct(
+                        [dbus.Int32(i), dbus.Dictionary(p, signature="sv")],
+                        signature="(ia{sv})") for i, p in updated],
+                    signature="(ia{sv})"),
+                dbus.Array([], signature="(ias)"))
 
     def _layout(self):
-        items = self._build_items()
+        if self._sig is None:      # first host call before any state change
+            self._rebuild()
         return dbus.Struct(
             [dbus.Int32(0),
              dbus.Dictionary({}, signature="sv"),
              dbus.Array(
-                 [dbus.Struct(i, signature="(ia{sv}av)") for i in items],
+                 [dbus.Struct(self._make_item(id_, props),
+                              signature="(ia{sv}av)")
+                  for id_, props in self._items],
                  signature="v")],
             signature="(ia{sv}av)"
         )
 
     def notify_update(self):
-        self._revision += 1
-        self.LayoutUpdated(self._revision, 0)
+        self._rebuild()
 
     # ── dbusmenu methods ─────────────────────────────────────────────────────
 
@@ -687,10 +889,12 @@ class DbusmenuServer(dbus.service.Object):
     @dbus.service.method("com.canonical.dbusmenu",
                          in_signature="aias", out_signature="a(ia{sv})")
     def GetGroupProperties(self, ids, propertyNames):
+        if self._sig is None:
+            self._rebuild()
         want  = {int(i) for i in ids}            # empty → all items, per spec
         names = {str(n) for n in propertyNames}  # empty → all properties
         result = []
-        for id_, props in self._item_props():
+        for id_, props in self._items:
             if want and id_ not in want:
                 continue
             if names:
@@ -703,7 +907,9 @@ class DbusmenuServer(dbus.service.Object):
     @dbus.service.method("com.canonical.dbusmenu",
                          in_signature="is", out_signature="v")
     def GetProperty(self, id_, name):
-        for iid, props in self._item_props():
+        if self._sig is None:
+            self._rebuild()
+        for iid, props in self._items:
             if iid == int(id_) and str(name) in props:
                 return props[str(name)]
         return dbus.String("")
@@ -716,9 +922,12 @@ class DbusmenuServer(dbus.service.Object):
         if id_ == QUIT_ID:
             GLib.idle_add(lambda: (self._on_quit(), False)[1])
             return
-        lookup = self._build_lookup()
-        if id_ in lookup:
-            ctrl_ident, mode = lookup[id_]
+        # Route via the cached model, so the click lands on exactly the item
+        # the host displayed. An id from a stale revision (structure changed
+        # since the host fetched it) is simply absent here and ignored.
+        hit = self._lookup.get(int(id_))
+        if hit:
+            ctrl_ident, mode = hit
             self._mgr.set_mode(ctrl_ident, mode)
 
     @dbus.service.method("com.canonical.dbusmenu",
