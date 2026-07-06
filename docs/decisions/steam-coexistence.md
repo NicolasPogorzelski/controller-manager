@@ -35,7 +35,7 @@ exactly the Steam/games population):
 Games that never touch raw HID (plain evdev/joystick titles) never take the lightbar, so
 the resting blue simply stays.
 
-## Required setup: disable PlayStation support in the Steam client
+## Required setup: disable PlayStation *and* Xbox controller support in the Steam client
 
 While the Steam *client* runs with PlayStation controller support enabled, it holds the
 pad permanently — indistinguishable from a running game, so the resting colour can never
@@ -54,6 +54,23 @@ Consequences of that setting:
 
 Without the setting, everything still degrades gracefully: green in `ps5-xbox` stays
 guaranteed (the gate revokes Steam), and blue returns whenever Steam fully exits.
+
+Steam Input's controller support is per-VID/PID family, not per-application, and it does
+not care whether a device is physical or `uinput`-virtual: enabling **Xbox controller
+support** makes Steam hold `ps5-xbox`'s virtual Xbox pad the same way PlayStation support
+holds the physical DualSense. Confirmed in the field (2026-07-06, Fedora/GNOME notebook,
+*Secrets of Grindea* under Steam): with Xbox controller support on, Steam opened the
+virtual pad's evdev node (visible in `lsof`) but never passed a working controller through
+to the game — input was dead in-game even though the daemon's remap was independently
+verified correct at the event level. The virtual pad has no hidraw node (see
+[output-protocol-constraints.md](output-protocol-constraints.md)), which Steam's Xbox
+input path appears to need for full negotiation; lacking it, Steam swallows the device
+without emulating it. Disabling **Xbox controller support** fixed it immediately, no
+daemon-side change needed.
+
+**Steam → Settings → Controller → Xbox controller support: off**, in addition to the
+PlayStation toggle above, is therefore required for `ps5-xbox` to reach games running
+under Steam.
 
 ## Rejected alternatives
 
