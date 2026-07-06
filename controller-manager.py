@@ -107,6 +107,31 @@ QUIRK_BUTTON_MAP = {
     },
 }
 
+# The 0x133/0x134 codes are positionally inverted between driver families:
+# hid-playstation emits Triangle (top) → BTN_NORTH (0x133) and Square (left)
+# → BTN_WEST (0x134), while xpad assigns the SAME codes the other way round —
+# X (left) → BTN_X (== BTN_NORTH) and Y (top) → BTN_Y (== BTN_WEST).
+# Consumers resolve codes against the advertised identity, so a 1:1
+# passthrough onto an "X-Box 360 pad" swaps X/Y in games. All other codes
+# (A/B, Select/Start/Guide, sticks and triggers via ABS) happen to agree.
+# Per target name: standard source code → code expected under that identity.
+TARGET_BUTTON_MAP = {
+    VIRTUAL_XBOX["name"]: {
+        e.BTN_NORTH: e.BTN_WEST,   # Triangle → 0x134, read as Y (top)
+        e.BTN_WEST:  e.BTN_NORTH,  # Square   → 0x133, read as X (left)
+    },
+}
+
+def compose_button_maps(quirk, target):
+    """Chain quirk (source code → standard code) and target (standard code →
+    code under the target identity) into the single dict the Remapper applies
+    per event; None when both are empty."""
+    quirk, target = quirk or {}, target or {}
+    combined = {src: target.get(std, std) for src, std in quirk.items()}
+    for std, tgt in target.items():
+        combined.setdefault(std, tgt)
+    return combined or None
+
 # DBus names
 BUS_NAME  = "org.kde.StatusNotifierItem-ctrlmgr-1"
 ITEM_PATH = "/StatusNotifierItem"
@@ -544,7 +569,9 @@ class ControllerInstance:
         self._refresh_nodes()
 
         if target and self.path:
-            bmap = QUIRK_BUTTON_MAP.get((self.vendor, self.product))
+            bmap = compose_button_maps(
+                QUIRK_BUTTON_MAP.get((self.vendor, self.product)),
+                TARGET_BUTTON_MAP.get(target["name"]))
             r = Remapper(self.path, target, bmap)
             r.start()
             self._remap = r
