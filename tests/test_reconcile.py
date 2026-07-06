@@ -19,6 +19,11 @@ except ModuleNotFoundError as ex:
     print(f"SKIP: runtime dependency missing ({ex.name}) — needs evdev/dbus/gi")
     sys.exit(0)
 
+# Never touch the user's real controller-modes.json: adoption persists the
+# assigned player numbers through save_config since the player-LED feature.
+cm.load_config = lambda: {}
+cm.save_config = lambda cfg: None
+
 # Keep a handle on the real ControllerInstance before the reconcile scenarios
 # swap in a lightweight fake; Scenario E exercises the real led self-heal.
 RealInst = cm.ControllerInstance
@@ -36,8 +41,9 @@ class FakeInst:
         self.uniq = uniq; self.phys = phys; self.hidraw = hidraw
         self.ident = cm.ident_of(vendor, product, uniq, phys)
         self._gone_since = None
+        self.player = None
         self.rebinds = 0; self.stopped = False
-    def apply_mode(self): pass
+    def apply_mode(self, adopt=False): pass
     def rebind(self, path, name, hidraw):
         self.rebinds += 1; self.path = path; self.name = name; self.hidraw = hidraw
     def stop(self): self.stopped = True
