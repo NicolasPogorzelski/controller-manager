@@ -50,7 +50,7 @@ class FakeInst:
     def virtual_path(self): return None
     def remap_healthy(self): return True  # liveness re-assert tested in Scenario H
     def refresh_led(self): pass   # led self-heal is exercised separately (Scenario E)
-    def watch_holders(self): pass # resting-colour policy needs /proc + sudo — not here
+    def watch_holders(self, steam_game=False): pass  # resting-colour policy needs /proc + sudo — not here
 
 cm.ControllerInstance = FakeInst
 

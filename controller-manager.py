@@ -262,6 +262,41 @@ def led_set_player(prefix, player):
         print(f"led_set_player: {prefix} failed: {ex}", file=sys.stderr)
 
 
+def is_steam_client(pid):
+    """True when the pid belongs to the Steam client itself (the main
+    client binary, comm 'steam', is the process that opens every pad's
+    hidraw for identification and Steam Input; the webhelper never does
+    but is included for completeness). Games — Steam-launched or not —
+    run under their own comms and count as foreign."""
+    try:
+        with open(f"/proc/{pid}/comm") as f:
+            return f.read().strip() in ("steam", "steamwebhelper")
+    except OSError:
+        return False
+
+
+def steam_game_running():
+    """True while any Steam-launched title is alive. Every Steam launch —
+    native or Proton alike — goes through the client's wrapper chain with
+    'SteamLaunch AppId=<id>' on the command line (steam-launch-wrapper and
+    reaper both carry the marker and live exactly as long as the game), so
+    one /proc cmdline sweep answers 'is a game running' without any Steam
+    IPC. Needed because a game under Steam Input never opens the pad
+    itself — the client's permanent hold is all the holder scan sees."""
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return False
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                if b"SteamLaunch AppId=" in f.read():
+                    return True
+        except OSError:              # process exited / not ours
+            continue
+    return False
+
+
 def hidraw_holders(nodes):
     """PIDs of other processes holding an open fd on any of the given
     /dev/hidrawN nodes. Only same-user processes are visible without
@@ -493,7 +528,9 @@ class ControllerInstance:
         self._gone_since = None   # monotonic time first seen absent, for grace
         # Resting-colour bookkeeping (ps5-native only, see watch_holders):
         self._holders      = set()   # hidraw holder pids last tick
-        self._settle_until = 0.0     # until then, new holders are reopen noise
+        self._suppressed   = False   # a game owned the lightbar last tick
+        self._latch_risk   = False   # a raw fd closed; firmware may be latched
+        self._assert_at    = 0.0     # next slow resting-colour re-assert
         self._repaint_at   = None    # scheduled one-shot resting repaint
         self._player_repaint_at = None   # one-shot player-LED-only re-assert
 
@@ -510,6 +547,9 @@ class ControllerInstance:
         land on a now-dead node. No-op for Xbox pads or when no node resolves."""
         if self.family != "ps5":
             return
+        # Every apply (whatever triggered it) pushes the next slow re-assert
+        # out by one full period — the assert is a backstop, not a metronome.
+        self._assert_at = time.monotonic() + 15.0
         led = led_indicator_for_event(self.path)
         if not led:
             return
@@ -544,22 +584,46 @@ class ControllerInstance:
         if led and led != self.led:
             self._apply_led()
 
-    def watch_holders(self):
+    def watch_holders(self, steam_game=False):
         """Resting-colour policy for ps5-native (remap modes need none of
-        this — there the gate guarantees exclusive LED ownership). Three
-        kinds of raw-HID holders exist, told apart by the holder-set delta:
+        this — there the gate guarantees exclusive LED ownership). The
+        question each tick is: does the lightbar belong to a GAME right
+        now? Two signals answer it (the Steam client holds every pad
+        permanently with PlayStation support enabled, so the holder set
+        alone no longer can):
 
-        * a RELEASER (game exited): it may leave the lightbar firmware-
-          latched dark ('light out' setup flag — kernel LED writes then
-          change nothing until the driver re-probes), so rearm (driver
-          rebind → fresh lightbar setup) and repaint the resting colour;
-        * a REOPENER (Steam enumerating the pad right after one of our
-          rebinds — it opens even with its PlayStation support disabled):
-          writes its defaults ONCE and goes quiet, so schedule one delayed
-          repaint to get the last word (field-verified: Steam reopened ~6 s
-          after a rebind and stomped the freshly painted colour);
-        * a genuinely NEW holder outside the settle window (a game started):
-          the lightbar is legitimately theirs — hands off, cancel repaints.
+        * steam_game — a Steam-launched title is alive (manager-wide
+          cmdline sweep, see steam_game_running). Games under Steam Input
+          never open the pad themselves, the client does it for them;
+        * a FOREIGN holder — any raw-HID holder that is not the Steam
+          client. Direct-access titles (Steam Input disabled per game,
+          Lutris/Wine, emulators) open the pad in their own name.
+
+        While either is true the lightbar is legitimately the game's:
+        hands off, cancel pending repaints. Otherwise the resting colour
+        is OURS — the idle client paints its slot colours only on discrete
+        events (startup, adopt, game exit) and stays quiet in between, so
+        the daemon re-asserts the mode colour after each of them
+        (rewriting an unchanged colour is visually a no-op — this is not
+        the paint war the native mode must avoid):
+
+        * a RELEASER closed a raw fd (game exited, Steam quit): it may
+          leave the lightbar firmware-latched dark ('light out' setup flag
+          — kernel LED writes then change nothing until the driver
+          re-probes), so rearm (driver rebind → fresh lightbar setup) and
+          repaint. Deferred while a game is still active: the rebind
+          would yank the running game's fd;
+        * suppression ended with no fd ever closing (a Steam Input game
+          exited): the client restores its slot colour on the way out —
+          one repaint shortly after gets the last word, no rearm needed;
+        * the client (re)opened the pad (enumeration after one of our
+          rebinds, or a client start): writes its defaults once and goes
+          quiet — one delayed repaint outlasts it (field-verified: Steam
+          reopened ~6 s after a rebind and stomped the fresh colour);
+        * backstop: a slow periodic re-assert (_assert_at, one period
+          after whatever painted last) recovers the mode colour from
+          anything unforeseen — so the pad shows its mode at a glance at
+          all times outside a running game.
 
         The scheduled one-shot repaint at the end fires in remap modes too:
         apply_mode arms it after every gate transition, because the write
@@ -570,20 +634,36 @@ class ControllerInstance:
         now = time.monotonic()
         if self._target_for_mode() is None:
             holders = hidraw_holders(self.hidraw)
-            if holders != self._holders:
-                released = self._holders - holders
-                self._holders = holders
-                if released:
-                    hidraw_gate("rearm", self.uniq, self.hidraw)   # kills fds too
+            foreign = any(not is_steam_client(pid) for pid in holders)
+            if self._holders - holders:
+                self._latch_risk = True    # a raw fd closed since last heal
+            changed = holders != self._holders
+            self._holders = holders
+            if steam_game or foreign:
+                self._suppressed = True
+                self._repaint_at = None            # lightbar is the game's
+                self._assert_at  = now + 15.0      # no overdue write at exit
+                                                   # racing Steam's restore
+            else:
+                if self._latch_risk:
+                    self._latch_risk = False
+                    self._suppressed = False
+                    hidraw_gate("rearm", self.uniq, self.hidraw)  # kills fds too
                     self._holders = set()          # we just revoked the rest
                     self._refresh_nodes()
                     self._apply_led()
-                    self._settle_until = now + 20.0
-                    self._repaint_at   = now + 6.0
-                elif now < self._settle_until:
-                    self._repaint_at = now + 6.0   # outlast the reopen write
-                else:
-                    self._repaint_at = None        # game took the pad on purpose
+                    self._repaint_at = now + 6.0
+                elif self._suppressed:
+                    self._suppressed = False
+                    self._repaint_at = now + 3.0   # outlast the exit restore
+                elif changed:
+                    self._repaint_at = now + 6.0   # outlast the (re)open write
+                if (now >= self._assert_at
+                        and not (self._repaint_at is not None
+                                 and now >= self._repaint_at)):
+                    # Backstop paint — unless a one-shot fires this very
+                    # tick anyway (below); _apply_led reschedules _assert_at.
+                    self._apply_led()
         if self._repaint_at is not None and now >= self._repaint_at:
             self._repaint_at = None
             self._apply_led()
@@ -646,16 +726,14 @@ class ControllerInstance:
 
         # The gate transition above may have rebound the driver: every old
         # holder fd is dead, and enumerators (Steam) will REOPEN the reborn
-        # nodes in a few seconds and write their defaults once — open the
-        # settle window so watch_holders schedules the outlasting repaint
-        # instead of mistaking the reopen for a game start. The repaint is
-        # also scheduled unconditionally: the immediate write below races the
-        # BT re-probe after a rebind and can be dropped by the pad — the
-        # delayed re-assert is what makes the colour stick (in remap modes
-        # too, where the holder policy itself is inactive).
-        self._holders      = set()
-        self._settle_until = time.monotonic() + 20.0
-        self._repaint_at   = time.monotonic() + 6.0
+        # nodes in a few seconds and write their defaults once —
+        # watch_holders outlasts that with a fresh delayed repaint. The
+        # repaint here is scheduled unconditionally: the immediate write
+        # below races the BT re-probe after a rebind and can be dropped by
+        # the pad — the delayed re-assert is what makes the colour stick
+        # (in remap modes too, where the holder policy itself is inactive).
+        self._holders    = set()
+        self._repaint_at = time.monotonic() + 6.0
 
         self._apply_led()
 
@@ -843,12 +921,16 @@ class ControllerManager:
         # LED self-heal + resting-colour watch, outside the lock (both may
         # shell out to sudo, and we must not stall set_mode/get_instances
         # behind that): a pad rebound while its :rgb:indicator node still
-        # lagged gets its colour applied on a later tick, and a ps5-native pad
-        # whose last raw-HID holder (Steam / a game) just exited gets rearmed
-        # and repainted to the resting blue.
-        for inst in self.get_instances():
+        # lagged gets its colour applied on a later tick, and a ps5-native
+        # pad reclaims its resting colour whenever no game owns the lightbar.
+        # The Steam-game sweep is one /proc pass for all pads, and skipped
+        # entirely when no pad is in a native ps5 mode (nobody would use it).
+        instances = self.get_instances()
+        steam_game = (any(i.mode == "ps5-native" for i in instances)
+                      and steam_game_running())
+        for inst in instances:
             inst.refresh_led()
-            inst.watch_holders()
+            inst.watch_holders(steam_game)
         return changed
 
     def _monitor(self):

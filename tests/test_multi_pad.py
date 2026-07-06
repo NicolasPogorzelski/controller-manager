@@ -54,7 +54,7 @@ class FakeInst:
     def virtual_path(self): return None
     def remap_healthy(self): return True
     def refresh_led(self): pass
-    def watch_holders(self): pass
+    def watch_holders(self, steam_game=False): pass
 
 cm.ControllerInstance = FakeInst
 
