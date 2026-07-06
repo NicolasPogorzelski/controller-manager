@@ -4,13 +4,46 @@
 # The raw-hidraw path races the driver and gets dropped over Bluetooth, leaving
 # the lightbar on its firmware default; going through the driver is reliable.
 #
-#   controller-led <ledname> <r> <g> <b>        # each channel 0-255
+#   controller-led <ledname> <r> <g> <b>        # lightbar, each channel 0-255
+#   controller-led player <inputN> <1-4>        # white player-LED pattern
 #
-# Safety: only a *:rgb:indicator LED that belongs to a Sony (054C) HID device is
-# ever written, so this can't be aimed at unrelated LEDs (keyboard, NIC, …).
-# Meant to be invoked through a tightly-scoped NOPASSWD sudoers rule.
+# Safety: only a *:rgb:indicator / *:white:player-N LED that belongs to a Sony
+# (054C) HID device is ever written, so this can't be aimed at unrelated LEDs
+# (keyboard, NIC, …). Meant to be invoked through a tightly-scoped NOPASSWD
+# sudoers rule.
 
 set -euo pipefail
+
+# HID_ID=BUS:0000VVVV:0000PPPP -> extract the 4-digit vendor; must be Sony.
+sony_ok() {
+  local ue="$1"
+  [[ -r "$ue" ]] || { echo "cannot read $ue" >&2; return 1; }
+  local vid
+  vid="$(sed -n 's/^HID_ID=[0-9A-Fa-f]*:0*\([0-9A-Fa-f]\{4\}\):.*/\1/p' "$ue" | tr 'a-f' 'A-F')"
+  [[ "$vid" == "054C" ]] || { echo "vendor '$vid' not Sony — refused" >&2; return 1; }
+}
+
+if [[ "${1:-}" == "player" ]]; then
+  prefix="${2:-}"; n="${3:-}"
+  [[ "$prefix" =~ ^input[0-9]+$ ]] || { echo "bad prefix '$prefix'" >&2; exit 2; }
+  [[ "$n" =~ ^[1-4]$ ]] || { echo "bad player '$n'" >&2; exit 2; }
+  base="/sys/class/leds/$prefix:white:player-1"
+  [[ -d "$base" ]] || { echo "$base absent, nothing to do"; exit 0; }
+  sony_ok "$base/device/uevent" || exit 3
+  # PS5-authentic patterns: the lit-LED count equals the player number.
+  case "$n" in
+    1) pat=(0 0 1 0 0) ;;
+    2) pat=(0 1 0 1 0) ;;
+    3) pat=(1 0 1 0 1) ;;
+    4) pat=(1 1 0 1 1) ;;
+  esac
+  for i in 1 2 3 4 5; do
+    dir="/sys/class/leds/$prefix:white:player-$i"
+    [[ -d "$dir" ]] && echo "${pat[$((i - 1))]}" > "$dir/brightness"
+  done
+  echo "controller-led: $prefix player -> $n"
+  exit 0
+fi
 
 led="${1:-}"; r="${2:-}"; g="${3:-}"; b="${4:-}"
 
@@ -26,11 +59,7 @@ for v in "$r" "$g" "$b"; do
   { [[ "$v" =~ ^[0-9]+$ ]] && (( v <= 255 )); } || { echo "bad channel '$v'" >&2; exit 2; }
 done
 
-# HID_ID=BUS:0000VVVV:0000PPPP -> extract the 4-digit vendor; must be Sony.
-ue="$dir/device/uevent"
-[[ -r "$ue" ]] || { echo "cannot read $ue" >&2; exit 3; }
-vid="$(sed -n 's/^HID_ID=[0-9A-Fa-f]*:0*\([0-9A-Fa-f]\{4\}\):.*/\1/p' "$ue" | tr 'a-f' 'A-F')"
-[[ "$vid" == "054C" ]] || { echo "vendor '$vid' of $led not Sony — refused" >&2; exit 3; }
+sony_ok "$dir/device/uevent" || exit 3
 
 printf '%s' "$r $g $b" > "$dir/multi_intensity"
 echo 255 > "$dir/brightness"

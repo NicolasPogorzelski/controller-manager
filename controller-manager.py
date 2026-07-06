@@ -245,6 +245,23 @@ def led_set(led, rgb):
         print(f"led_set: {led} failed: {ex}", file=sys.stderr)
 
 
+def led_set_player(prefix, player):
+    """Light the pad's white player LEDs (hid-playstation …:white:player-N)
+    to the daemon's stable player number via the root helper. The pattern is
+    PS5-authentic: the lit-LED count equals the player number. No-op without
+    a helper, a prefix or a representable number (patterns cover 1-4)."""
+    if not prefix or not player or player > 4 or not os.path.exists(LED_BIN):
+        return
+    try:
+        subprocess.run(
+            ["sudo", "-n", LED_BIN, "player", prefix, str(player)],
+            timeout=5, check=False,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception as ex:
+        print(f"led_set_player: {prefix} failed: {ex}", file=sys.stderr)
+
+
 def hidraw_holders(nodes):
     """PIDs of other processes holding an open fd on any of the given
     /dev/hidrawN nodes. Only same-user processes are visible without
@@ -465,12 +482,20 @@ class ControllerInstance:
         # Xbox pads or when the node can't be resolved. Re-resolved per instance,
         # so it tracks the node renumbering that happens on every BT reconnect.
         self.led     = led_indicator_for_event(path) if family == "ps5" else None
+        # Stable player number in overall connection order (first-connected
+        # pad = 1), assigned by the manager at adoption and freed on removal.
+        # Shown on the DualSense white player LEDs and in the tray label —
+        # deliberately OURS, not the kernel's: the kernel re-allocates its id
+        # on every gate rebind, and Steam renumbers its slots on every
+        # (re)enumeration, so both drift under mode switches.
+        self.player  = None
         self._remap  = None
         self._gone_since = None   # monotonic time first seen absent, for grace
         # Resting-colour bookkeeping (ps5-native only, see watch_holders):
         self._holders      = set()   # hidraw holder pids last tick
         self._settle_until = 0.0     # until then, new holders are reopen noise
         self._repaint_at   = None    # scheduled one-shot resting repaint
+        self._player_repaint_at = None   # one-shot player-LED-only re-assert
 
     def display_name(self):
         return self.name
@@ -490,6 +515,20 @@ class ControllerInstance:
             return
         self.led = led
         led_set(led, MODE_LED.get(self.mode, (0, 0, 0)))
+        self._apply_player_leds()
+
+    def _apply_player_leds(self):
+        """Re-assert this pad's player number on its white player LEDs. Same
+        churn problem as the lightbar: the kernel re-allocates its player id
+        on every gate rebind and Steam rewrites its own slot count raw on
+        every (re)enumeration — the daemon's adoption-ordered number is the
+        one that stays put. The LED names share the pad's live inputN prefix
+        with the rgb indicator, so resolve it from there."""
+        if self.family != "ps5" or not self.player:
+            return
+        led = led_indicator_for_event(self.path)
+        if led:
+            led_set_player(led.split(":", 1)[0], self.player)
 
     def refresh_led(self):
         """Repaint the lightbar when its LED node has renumbered under us. The
@@ -548,6 +587,14 @@ class ControllerInstance:
         if self._repaint_at is not None and now >= self._repaint_at:
             self._repaint_at = None
             self._apply_led()
+        # Player-LED-only re-assert, armed by the manager when ANOTHER pad's
+        # gate churn made Steam recount and rewrite its slots on every pad it
+        # holds. Deliberately does not touch the lightbar: outside the settle
+        # window that may legitimately belong to a game.
+        if (self._player_repaint_at is not None
+                and now >= self._player_repaint_at):
+            self._player_repaint_at = None
+            self._apply_player_leds()
 
     # ── mode / lifecycle ──────────────────────────────────────────────────────
 
@@ -721,6 +768,8 @@ class ControllerManager:
         for d in self._scan():
             found[self._ident(d)] = d   # identical padless pads collapse; acceptable
         changed = False
+        churned = False       # any gate/driver churn Steam re-enumerates on
+        config_dirty = False  # a player number was assigned or changed
         now = time.monotonic()
         with self._lock:
             # Reconcile known instances: rebind on reconnect, drop after grace.
@@ -738,6 +787,7 @@ class ControllerManager:
                 inst._gone_since = None             # present again
                 if d["path"] != inst.path:          # reconnected on a new node
                     inst.rebind(d["path"], d["name"], d["hidraw"])
+                    churned = True
                 elif was_gone or not inst.remap_healthy():
                     # Two ways a pad can look unchanged yet be broken underneath:
                     #  * reconnected on the *reused* evdev path (BT re-pair /
@@ -749,6 +799,7 @@ class ControllerManager:
                     # Both: re-assert the whole mode — restart the remapper,
                     # re-gate the hidraw node, repaint the lightbar.
                     inst.rebind(d["path"], d["name"], d["hidraw"])
+                    churned = True
             # Add genuinely new controllers.
             for ident, d in found.items():
                 if ident in self._instances:
@@ -763,9 +814,30 @@ class ControllerManager:
                 inst = ControllerInstance(
                     d["path"], d["name"], d["vendor"], d["product"],
                     d["family"], mode, d["uniq"], d["phys"], d["hidraw"])
+                # Overall connection order: a pad keeps the number it was
+                # FIRST adopted under ("_players" in the config, keyed like
+                # the modes by stable ident) — daemon restarts re-adopt in
+                # evdev node order, which the gate rebinds shuffle, so the
+                # session order alone would swap numbers between restarts.
+                # Fresh pads (or a persisted number currently worn by another
+                # connected pad) take the lowest free number.
+                used = {i.player for i in self._instances.values()}
+                player = self._config.get("_players", {}).get(ident)
+                if not player or player in used:
+                    player = next(p for p in range(1, len(used) + 2)
+                                  if p not in used)
+                inst.player = player
+                if self._config.get("_players", {}).get(ident) != player:
+                    self._config.setdefault("_players", {})[ident] = player
+                    config_dirty = True
                 inst.apply_mode(adopt=True)
                 self._instances[ident] = inst
                 changed = True
+                churned = True
+            if churned:
+                self._arm_player_reassert()
+        if config_dirty:
+            save_config(self._config)
         if changed:
             GLib.idle_add(self._on_change)
         # LED self-heal + resting-colour watch, outside the lock (both may
@@ -788,6 +860,15 @@ class ControllerManager:
         with self._lock:
             return list(self._instances.values())
 
+    def _arm_player_reassert(self):
+        """A gate/driver rebind makes enumerators (Steam) recount and rewrite
+        THEIR player slots raw on every pad they hold — not just the rebound
+        one. Schedule a one-shot re-assert of our stable numbers on all ps5
+        pads once that write has passed. Called under the manager lock."""
+        for inst in self._instances.values():
+            if inst.family == "ps5":
+                inst._player_repaint_at = time.monotonic() + 6.0
+
     def set_mode(self, ident, mode):
         with self._lock:
             inst = self._instances.get(ident)
@@ -796,6 +877,7 @@ class ControllerManager:
             inst.mode = mode
             inst.apply_mode()
             self._config[inst.ident] = mode
+            self._arm_player_reassert()
         save_config(self._config)
         GLib.idle_add(self._on_change)
 
@@ -843,10 +925,15 @@ class DbusmenuServer(dbus.service.Object):
         )
 
     def _inst_label(self, inst, instances):
-        """'DualSense' for a unique model; 'DualSense 1 / 2' when duplicates exist."""
+        """'DualSense' for a unique model; 'DualSense <player>' when duplicates
+        exist. The player number is the same one shown on the pad's white
+        player LEDs, so menu and hardware always agree — a positional index
+        would flip after a drop-and-readopt while the LEDs kept the number."""
         peers = [i for i in instances if i.name == inst.name]
         if len(peers) == 1:
             return inst.name
+        if inst.player:
+            return f"{inst.name} {inst.player}"
         return f"{inst.name} {peers.index(inst) + 1}"
 
     def _semantic_items(self):
