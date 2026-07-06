@@ -2,6 +2,27 @@
 
 Short, rolling list of where this project stands and what comes next. Newest status on top.
 
+## Status — 2026-07-06 (evening): full Steam ownership in native mode
+
+The SDL ignore-vars workaround from the afternoon (below) is **superseded**: the
+project moved to the other clean end of the spectrum — the Steam client manages the
+physical DualSense fully. PlayStation controller support is back on ("Enabled in
+Games w/o Support", `PSSupport=1`): titles with native DualSense support get the pad
+directly (adaptive triggers, gyro, haptics), everything else gets Steam Input. The
+`steam.desktop` env override and the (ineffective anyway) `controller_blacklist`
+entry are gone; Steam autostarts with the session (`~/.config/autostart/`).
+
+Daemon-side, the resting-colour policy no longer counts holders (the client now holds
+every pad permanently — the delta model could not tell an idle desktop from a running
+game) but **classifies**: a `/proc` sweep for the launch wrapper's
+`SteamLaunch AppId=` cmdline marker catches Steam Input titles, a holder-comm check
+catches direct-access titles (Lutris, per-game Steam Input opt-outs). No game →
+the mode colour is re-asserted (event-driven one-shots + a slow backstop), so the pad
+shows its mode at a glance right up to the moment a game starts and again seconds
+after it ends. In `ps5-xbox` the green stays guaranteed even in-game (the gate keeps
+the physical pad exclusive; games see only the virtual pad). Tests:
+`tests/test_steam_ownership.py`; decision rewrite: `docs/decisions/steam-coexistence.md`.
+
 ## Status — 2026-07-06
 
 Multi-controller track started; the 2× DualSense half is **verified on hardware**

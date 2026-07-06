@@ -21,8 +21,8 @@ Asserted through the kernel LED class (`controller-led player <inputN> <1-4>`,
 PS5-authentic patterns — the lit-LED count equals the player number) together with
 every lightbar apply, plus a one-shot re-assert ~6 s after ANY pad's gate churn: that
 is when Steam recounts and rewrites its slots on every pad it holds. The one-shot
-deliberately leaves the lightbar alone — outside the settle window it may legitimately
-belong to a game (see [steam-coexistence](steam-coexistence.md)).
+deliberately leaves the lightbar alone — it may legitimately belong to a running
+game at that moment (see [steam-coexistence](steam-coexistence.md)).
 
 The tray label shows the same number ("DualSense 1" = the pad with one lit LED), so
 menu and hardware cannot disagree — a positional label would flip after a

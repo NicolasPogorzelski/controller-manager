@@ -17,109 +17,107 @@ and "the game's lightbar effects" cannot both win at the same time.
 
 | Mode | Raw HID (hidraw) | Lightbar |
 |---|---|---|
-| `ps5-xbox` (remap) | daemon exclusive — the [gate](hidraw-gate.md) revokes and blocks everyone else | **green, guaranteed** |
-| `ps5-native` | applications (Steam, games) — full native features, daemon hands off | **resting blue**, games may override while they hold the pad |
+| `ps5-xbox` (remap) | daemon exclusive — the [gate](hidraw-gate.md) revokes and blocks everyone else | **green, guaranteed** — in games too (they only ever see the virtual Xbox pad) |
+| `ps5-native` | applications (Steam client permanently, games while they run) — full native features | **resting blue while no game runs**; a running game's for exactly as long as it runs |
 
-## Decision: resting colour, not a paint war
+## Decision: the resting colour belongs to the daemon, the game colour to the game
 
-In `ps5-native` the daemon must not fight applications for the lightbar (a periodic
-repaint would flicker against game effects and defeat native support). Instead it watches
-**who holds the pad's hidraw nodes** (`/proc/*/fd` — same-user processes, which is
-exactly the Steam/games population):
+The pivot (2026-07-06): with PlayStation controller support enabled the Steam client
+holds every DualSense **permanently**, so "someone holds the pad" no longer separates
+an idle desktop from a running game. The policy therefore *classifies* instead of
+counting holders. Two cheap signals decide who owns the lightbar each monitor tick:
 
-- someone holds the pad → the lightbar is legitimately theirs; hands off;
-- the **last holder disappears** (game exited, Steam closed) → the pad may be latched
-  dark, so the daemon *rearms* it (driver rebind → fresh lightbar setup) and repaints the
-  resting blue within a couple of monitor ticks;
-- the pad is **already held when the daemon adopts it** (field case: a freshly paired
-  second DualSense — Steam grabbed it at connect and latched it before we ever saw it) →
-  same problem, but no holder ever *disappears* and, the identity being new to the gate,
-  the adoption `restore` is no marker transition and rebinds nothing. Adoption therefore
-  forces a one-time rearm when foreign holders pre-date it. Outside adoption a
-  native-mode `apply_mode` never rearms — that would yank a running game's fd.
+- **A Steam-launched title is alive.** Every Steam launch — native or Proton — goes
+  through the client's wrapper chain with `SteamLaunch AppId=<id>` on the command line
+  (`steam-launch-wrapper` and `reaper` both carry it and live exactly as long as the
+  game), so one `/proc` cmdline sweep answers "is a game running" without any Steam
+  IPC. Needed because a game under Steam Input never opens the pad itself — the
+  client's permanent hold is all the holder scan sees.
+- **A foreign holder exists** — any raw-HID holder that is not the Steam client
+  (`comm` ≠ `steam`). Direct-access titles (Steam Input disabled per game, Lutris /
+  bare Wine, emulators) open the pad in their own name.
 
-Every `apply_mode` additionally arms a **one-shot delayed repaint** (~6 s): the colour
-write immediately after a driver rebind races the pad's BT re-probe and can be dropped —
-the re-assert is what makes the colour stick. It fires in remap modes too, where the
-holder policy itself is inactive.
+While either signal is true the lightbar is legitimately the game's: hands off, cancel
+pending repaints. Otherwise the mode colour is the daemon's — the idle client paints
+its slot colours only on discrete events (startup, pad adoption, game exit) and stays
+quiet in between, so the daemon re-asserts the resting colour after each of them.
+Rewriting an unchanged colour through the kernel LED class is visually a no-op, so
+this is *not* the flickering paint war that per-tick enforcement against a running
+game's effects would be (that remains rejected, see below):
 
-Games that never touch raw HID (plain evdev/joystick titles) never take the lightbar, so
-the resting blue simply stays.
+- **a raw fd closed** (direct-access game exited, Steam quit): the firmware may now
+  be latched dark → *rearm* (driver rebind → fresh lightbar setup) and repaint.
+  Deferred while a game is still active — the rebind would yank running fds;
+- **a Steam Input game exited without any fd closing**: the client restores its slot
+  colour on the way out → one repaint ~3 s later gets the last word, no rearm needed;
+- **the client (re)opened the pad** (enumeration after one of our rebinds, or a
+  client start): it writes its defaults once and goes quiet → one repaint ~6 s later
+  outlasts it (field-verified: Steam reopened ~6 s after a rebind and stomped the
+  freshly painted colour);
+- **backstop**: a slow periodic re-assert (~15 s after whatever painted last)
+  recovers the colour from anything unforeseen — the pad shows its mode at a glance
+  at all times outside a running game.
 
-## Required setup: disable PlayStation *and* Xbox controller support in the Steam client
+Games that never touch raw HID (plain evdev/joystick titles) never take the lightbar,
+so the resting colour simply stays. Regression coverage:
+`tests/test_steam_ownership.py`.
 
-While the Steam *client* runs with PlayStation controller support enabled, it holds the
-pad permanently — indistinguishable from a running game, so the resting colour can never
-return until Steam exits. The supported setup is therefore:
+## Required setup in the Steam client
 
-**Steam → Settings → Controller → PlayStation controller support: off.**
+**Steam → Settings → Controller → PlayStation controller support:
+"Enabled in Games w/o Support"** (`SteamController_PSSupport "1"` in
+`userdata/<id>/config/localconfig.vdf`).
 
-Consequences of that setting:
+- Titles **with** native DualSense support talk to the pad directly — adaptive
+  triggers, gyro, haptics, everything the title implements.
+- Titles **without** native support get Steam Input's remapping (gyro-as-mouse etc.)
+  via the client's virtual pad.
+- The third setting, "Enabled" (`2`), would put Steam Input in front of *every*
+  title, masking native DualSense features behind the client's virtual pad — not
+  what this project wants as a default; it remains available per game via the
+  title's controller settings.
 
-- The Steam client leaves the physical DualSense alone; the resting blue works.
-- Games keep their **native** DualSense features — modern titles talk to the pad through
-  their own SDL/hidapi, not through the Steam client.
-- What is lost is Steam-Input *remapping of the physical DualSense identity* — which this
-  project replaces anyway: switch the pad to `ps5-xbox` and Steam Input sees a plain
-  Xbox 360 pad it can remap freely.
+**Steam → Settings → Controller → Xbox controller support: off**
+(`SteamController_XBoxSupport "0"`) — unchanged and still required: Steam Input's
+support toggles are per-VID/PID family and blind to a device being `uinput`-virtual.
+With Xbox support on, Steam swallows `ps5-xbox`'s virtual pad without passing a
+working controller to the game (field-confirmed 2026-07-05, *Secrets of Grindea*:
+the virtual pad has no hidraw node, which Steam's Xbox path needs for negotiation —
+input was dead in-game; disabling the toggle fixed it immediately). See
+[output-protocol-constraints.md](output-protocol-constraints.md).
 
-Without the setting, everything still degrades gracefully: green in `ps5-xbox` stays
-guaranteed (the gate revokes Steam), and blue returns whenever Steam fully exits.
+## History: the SDL ignore-vars workaround (2026-07-06, superseded same day)
 
-Steam Input's controller support is per-VID/PID family, not per-application, and it does
-not care whether a device is physical or `uinput`-virtual: enabling **Xbox controller
-support** makes Steam hold `ps5-xbox`'s virtual Xbox pad the same way PlayStation support
-holds the physical DualSense. Confirmed in the field (2026-07-06, Fedora/GNOME notebook,
-*Secrets of Grindea* under Steam): with Xbox controller support on, Steam opened the
-virtual pad's evdev node (visible in `lsof`) but never passed a working controller through
-to the game — input was dead in-game even though the daemon's remap was independently
-verified correct at the event level. The virtual pad has no hidraw node (see
-[output-protocol-constraints.md](output-protocol-constraints.md)), which Steam's Xbox
-input path appears to need for full negotiation; lacking it, Steam swallows the device
-without emulating it. Disabling **Xbox controller support** fixed it immediately, no
-daemon-side change needed.
+An earlier field finding, kept for the record: with **both** support toggles off the
+client *still* opens every DualSense hidraw at startup for identification
+("Controller using HIDAPI driver" in `logs/controller.txt`, build 1782866176),
+repaints the pads with its slot colours and leaves the "light out" latch behind on
+exit. `"controller_blacklist" "054c/0ce6"` in `config/config.vdf` — the classic
+remedy — was demonstrably loaded yet **ineffective**. What did work was scoping the
+SDL ignore list to the Steam process via a user-local `steam.desktop` override:
 
-**Steam → Settings → Controller → Xbox controller support: off**, in addition to the
-PlayStation toggle above, is therefore required for `ps5-xbox` to reach games running
-under Steam.
+```
+SDL_GAMECONTROLLER_IGNORE_DEVICES=0x054c/0x0ce6
+SDL_HIDAPI_IGNORE_DEVICES=0x054c/0x0ce6
+```
 
-## Field finding (2026-07-06): the toggles do not stop the identification open
-
-Both support toggles off is necessary but **not sufficient**. The Steam client still
-opens every DualSense hidraw node at startup for identification ("Controller using
-HIDAPI driver" in `logs/controller.txt`), holds it, and paints/latches the lightbar —
-verified with client build 1782866176: with Steam stopped both pads held the daemon's
-resting blue; starting Steam took both nodes within a second and repainted the pads with
-Steam's own slot colours despite `SteamController_PSSupport=0` and
-`SteamController_XBoxSupport=0`. On exit that open leaves the "light out" latch behind.
-
-- `"controller_blacklist" "054c/0ce6"` in `config/config.vdf` — the classic remedy —
-  was **ineffective**: the entry survived the restart and was demonstrably loaded, yet
-  the client still ran its HIDAPI driver on both pads.
-- What works: the SDL ignore-list environment variables, set for the Steam process only:
-
-  ```
-  SDL_GAMECONTROLLER_IGNORE_DEVICES=0x054c/0x0ce6
-  SDL_HIDAPI_IGNORE_DEVICES=0x054c/0x0ce6
-  ```
-
-  With these, Steam opens no DualSense hidraw node at all and `controller.txt` shows no
-  HIDAPI driver line. Deployed as a user-local desktop-file override
-  (`~/.local/share/applications/steam.desktop`, every `Exec=` wrapped in `env …`), which
-  shadows the system entry for GUI launches without touching other SDL applications —
-  a session-wide export would blind *every* SDL game to the physical pad and break
-  `ps5-native` outside Steam.
-
-Trade-off: games **launched by Steam** inherit the variables, so Steam-launched titles
-lose native access to the *physical* DualSense identity too. That matches the ownership
-model (Steam is served by `ps5-xbox`'s virtual pad); a per-game escape hatch exists via
-launch options: `env -u SDL_GAMECONTROLLER_IGNORE_DEVICES -u SDL_HIDAPI_IGNORE_DEVICES
-%command%`. Steam started from a terminal bypasses the desktop override; the daemon's
-rearm-on-last-holder-exit then heals the latch as before.
+That gave the daemon sole lightbar ownership — at the price of Steam-launched titles
+inheriting the variables and losing native access to the physical DualSense entirely.
+It was the "Steam sees nothing" end of the spectrum; the project has since moved to
+the other clean end, "Steam manages fully" (above), which needs neither the override
+nor the (useless) blacklist entry. Both have been removed from the deployed setup.
+The middle ground — toggles off but no ignore vars — remains the one broken state:
+the identification open holds and latches pads for no benefit.
 
 ## Rejected alternatives
 
-- **Enforcing blue periodically in native mode** — visible flicker war against Steam and
-  game effects; breaks the features native mode exists for.
-- **Reading the current lightbar colour to decide** — impossible: raw-HID writes by other
-  processes do not go through the kernel LED class, so there is nothing to read back.
+- **Enforcing blue per-tick against a running game** — visible flicker war against
+  game effects; breaks the features native mode exists for. The periodic backstop
+  above never fires while a game owns the pad.
+- **Reading the current lightbar colour to decide** — impossible: raw-HID writes by
+  other processes do not go through the kernel LED class, so there is nothing to
+  read back.
+- **Keeping the SDL ignore-vars override** (see History) — daemon-guaranteed colours
+  at all times, but Steam-launched titles lose every native DualSense feature; the
+  per-game escape hatch (`env -u … %command%`) made full-featured gaming opt-in
+  fiddling instead of the default.
