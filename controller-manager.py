@@ -522,25 +522,29 @@ class ControllerInstance:
         * a genuinely NEW holder outside the settle window (a game started):
           the lightbar is legitimately theirs — hands off, cancel repaints.
 
+        The scheduled one-shot repaint at the end fires in remap modes too:
+        apply_mode arms it after every gate transition, because the write
+        right after a driver rebind races the BT re-probe and can be dropped.
         Called from the monitor tick, outside the manager lock (shells out)."""
-        if self.family != "ps5" or self._target_for_mode() is not None:
+        if self.family != "ps5":
             return
         now = time.monotonic()
-        holders = hidraw_holders(self.hidraw)
-        if holders != self._holders:
-            released = self._holders - holders
-            self._holders = holders
-            if released:
-                hidraw_gate("rearm", self.uniq, self.hidraw)   # kills fds too
-                self._holders = set()          # we just revoked the rest
-                self._refresh_nodes()
-                self._apply_led()
-                self._settle_until = now + 20.0
-                self._repaint_at   = now + 6.0
-            elif now < self._settle_until:
-                self._repaint_at = now + 6.0   # outlast the reopen write
-            else:
-                self._repaint_at = None        # game took the pad on purpose
+        if self._target_for_mode() is None:
+            holders = hidraw_holders(self.hidraw)
+            if holders != self._holders:
+                released = self._holders - holders
+                self._holders = holders
+                if released:
+                    hidraw_gate("rearm", self.uniq, self.hidraw)   # kills fds too
+                    self._holders = set()          # we just revoked the rest
+                    self._refresh_nodes()
+                    self._apply_led()
+                    self._settle_until = now + 20.0
+                    self._repaint_at   = now + 6.0
+                elif now < self._settle_until:
+                    self._repaint_at = now + 6.0   # outlast the reopen write
+                else:
+                    self._repaint_at = None        # game took the pad on purpose
         if self._repaint_at is not None and now >= self._repaint_at:
             self._repaint_at = None
             self._apply_led()
@@ -554,7 +558,7 @@ class ControllerInstance:
             return VIRTUAL_PS5
         return None
 
-    def apply_mode(self):
+    def apply_mode(self, adopt=False):
         """Stop existing remapper, transition the hidraw gate, start a new
         remapper if needed, update LED. A gate state transition rebinds the
         kernel driver (to revoke foreign fds and reset the lightbar latch),
@@ -573,6 +577,17 @@ class ControllerInstance:
         # it when returning to native.
         hidraw_gate("block" if target else "restore", self.uniq, self.hidraw)
         self._refresh_nodes()
+        if adopt and not target and hidraw_holders(self.hidraw):
+            # Adoption found the pad already opened by someone else: that fd
+            # predates us (Steam Input grabs every pad the moment it connects)
+            # and may have firmware-latched the lightbar dark — a state no
+            # later kernel LED write can clear. Gating relies on marker
+            # TRANSITIONS to rebind, and a freshly paired identity has no
+            # marker, so the restore above never rebound — force it here.
+            # Holders that arrive THROUGH a restore rebind never hit this:
+            # their nodes are renumbered and reopen only seconds later.
+            hidraw_gate("rearm", self.uniq, self.hidraw)
+            self._refresh_nodes()
 
         if target and self.path:
             bmap = compose_button_maps(
@@ -586,10 +601,14 @@ class ControllerInstance:
         # holder fd is dead, and enumerators (Steam) will REOPEN the reborn
         # nodes in a few seconds and write their defaults once — open the
         # settle window so watch_holders schedules the outlasting repaint
-        # instead of mistaking the reopen for a game start.
+        # instead of mistaking the reopen for a game start. The repaint is
+        # also scheduled unconditionally: the immediate write below races the
+        # BT re-probe after a rebind and can be dropped by the pad — the
+        # delayed re-assert is what makes the colour stick (in remap modes
+        # too, where the holder policy itself is inactive).
         self._holders      = set()
         self._settle_until = time.monotonic() + 20.0
-        self._repaint_at   = None
+        self._repaint_at   = time.monotonic() + 6.0
 
         self._apply_led()
 
@@ -744,7 +763,7 @@ class ControllerManager:
                 inst = ControllerInstance(
                     d["path"], d["name"], d["vendor"], d["product"],
                     d["family"], mode, d["uniq"], d["phys"], d["hidraw"])
-                inst.apply_mode()
+                inst.apply_mode(adopt=True)
                 self._instances[ident] = inst
                 changed = True
         if changed:
