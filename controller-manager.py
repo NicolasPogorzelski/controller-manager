@@ -302,9 +302,15 @@ def scan_controllers(exclude_paths=frozenset()):
         except Exception:
             continue
         try:
-            if dev.name in VIRTUAL_NAMES:
-                continue
             phys = dev.phys or ""
+            # Our own virtual output pads: python-evdev stamps every uinput
+            # device it creates with its phys marker, so that — not the name —
+            # is the reliable tell. The name may only exclude when phys is
+            # empty: xpad names a REAL wired Xbox 360 pad exactly like
+            # VIRTUAL_XBOX, but a physical pad always carries its usb/bt
+            # attachment in phys, so it stays adoptable.
+            if phys == "py-evdev-uinput" or (not phys and dev.name in VIRTUAL_NAMES):
+                continue
             # Software-emulated pads: Sunshine (inputtino) creates virtual
             # DualSense/Xbox pads over uhid with a REAL Sony/Microsoft VID for
             # its stream clients. Adopting one would grab and remap a stream
