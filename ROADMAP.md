@@ -111,7 +111,15 @@ is reused while `inputN`-derived nodes (the `:rgb:indicator` LED) renumber. The 
 - **LED write race vs Steam Input (residual):** a single LED write at the exact instant of
   reconnect can be overwritten as the pad comes up; the re-assert one poll later is what makes
   the colour stick — best-effort, not a hard guarantee. Not a new bug.
-- **Remapper liveness on sub-poll blips:** the reconnect re-assert triggers on an absent→present
-  transition seen by the 2 s poll. A BT blip shorter than one poll can kill the remapper's grab
-  without the poll noticing, leaving the pad un-remapped until the next real event. A liveness
-  check (restart the remapper if the mode wants one but it is not alive) would close this.
+- **Remapper liveness on sub-poll blips (resolved 2026-07-05):** a BT blip shorter than one
+  2 s poll can kill the remapper's grab without the pad appearing absent. The reconcile now
+  checks `remap_healthy()` on every present pad and restarts the remapper when the mode wants
+  one but the thread is dead (`tests/test_reconcile.py`, Scenario H) — kept here for the record.
+- **Mode switch blocks the D-Bus main loop (deferred):** `set_mode` runs in the GLib main
+  thread and calls `apply_mode`, which shells out to the gate helper (`sudo`, up to a 10 s
+  timeout) and can `sleep` up to 3 s in `_refresh_nodes` — all while holding the manager
+  lock. A tray click can therefore freeze the tray/menu for ~1-2 s (worst case longer) and
+  stall the monitor thread. A correct fix moves the privileged, blocking work off the main
+  thread (worker/queue) with per-instance locking so the reconcile can't race the same pad.
+  Deferred deliberately: it is an invasive concurrency change with real regression risk and
+  needs hardware to verify, and the visible cost on a single-user desktop tray is small.

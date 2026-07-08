@@ -15,3 +15,5 @@ Operational procedures for installing and verifying Controller Manager.
 - [Installation](install.md) — deploy the daemon, service, and hidraw gate.
 - [Update](update.md) — update an existing installation to a newer version.
 - [Verify a remap](verify-remapping.md) — confirm grab, virtual device, and gating.
+- [Verify multi-controller operation](verify-multi-controller.md) — four pads managed
+  independently: numbering, per-pad modes/gating, confined reconnect churn.

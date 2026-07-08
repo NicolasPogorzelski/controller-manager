@@ -9,25 +9,30 @@ reconnects, so it cannot key persisted configuration.
 
 ## Decision
 
-Identify each controller by its **stable per-device id** — the evdev `uniq` value, which
-is the Bluetooth MAC (or serial) for the controllers this tool targets.
+Identify each controller by a **stable per-device id** — the evdev `uniq` value (the
+Bluetooth MAC / serial) when the pad reports one, else its physical attachment point
+(`phys:…`), else `vendor:product` as a last resort. This is what `ident_of()` computes.
 
-- **Configuration** in `controller-modes.json` is keyed by `uniq`.
-- The **tray label** is disambiguated with a short tail of the `uniq`, so two identical
-  controllers are distinguishable in the menu.
+- **Configuration** in `controller-modes.json` is keyed by this identity.
+- The **tray label** is disambiguated by the pad's daemon-assigned **player number** (the
+  same one shown on the DualSense white player LEDs), so two identical controllers are
+  distinguishable in the menu and menu and hardware always agree — see
+  [player-leds](player-leds.md).
 - The runtime device map is still keyed by the current `eventX` path (it must be, for
   hotplug), but the *identity* that survives reconnects and that the user configures is the
-  `uniq`.
+  stable id above.
 
-If a device exposes no `uniq`, the daemon falls back to a `vendor:product` key for that
-device.
+The fallback chain matters for two identical serial-less USB pads: they report no `uniq`,
+so `phys:` (the USB port) is what keeps them apart; `vendor:product` alone would collapse
+them into one.
 
 ## Consequences
 
 - Two identical controllers keep separate, persistent modes.
 - A controller keeps its mode across reconnects and across `eventX` renumbering.
-- Because the [hidraw gate](hidraw-gate.md) also operates per node, the whole pipeline —
-  detection, configuration, remapping, and gating — is independent per physical device.
+- Because the [hidraw gate](hidraw-gate.md) is also keyed by the pad's stable identity
+  (its `HID_UNIQ` marker), the whole pipeline — detection, configuration, remapping, and
+  gating — is independent per physical device.
 
 ## Migration note
 
