@@ -143,13 +143,25 @@ QUIT_ID   = 9999
 
 def load_config():
     try:
-        return json.loads(open(CONFIG_FILE).read())
+        with open(CONFIG_FILE) as f:
+            return json.loads(f.read())
     except Exception:
         return {}
 
 def save_config(cfg):
-    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-    open(CONFIG_FILE, "w").write(json.dumps(cfg, indent=2))
+    # Atomic write: a crash / OOM-kill / full disk mid-write must not leave a
+    # truncated file — load_config swallows a parse error and returns {}, which
+    # would silently drop every persisted mode and player number. Write a temp
+    # file in the same directory (same filesystem, so os.replace is atomic),
+    # fsync it, then rename over the target.
+    d = os.path.dirname(CONFIG_FILE)
+    os.makedirs(d, exist_ok=True)
+    tmp = f"{CONFIG_FILE}.tmp"
+    with open(tmp, "w") as f:
+        f.write(json.dumps(cfg, indent=2))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, CONFIG_FILE)
 
 
 # ── hidraw gate ──────────────────────────────────────────────────────────────
@@ -426,67 +438,77 @@ class Remapper(threading.Thread):
             pass
 
     def run(self):
+        # Everything the loop allocates (source fd, virtual uinput, selector)
+        # is tracked here so the single finally can release it on ANY exit —
+        # including the early error returns below. The self-pipe fds are opened
+        # in __init__, so they must be closed on every path too; leaking them
+        # (as an earlier version did when grab() failed) exhausts the daemon's
+        # fd budget under a pad whose grab keeps racing.
+        src = ui = sel = None
         try:
-            src = evdev.InputDevice(self._src_path)
-        except Exception as ex:
-            print(f"remapper: cannot open {self._src_path}: {ex}", file=sys.stderr)
-            return
+            try:
+                src = evdev.InputDevice(self._src_path)
+            except Exception as ex:
+                print(f"remapper: cannot open {self._src_path}: {ex}", file=sys.stderr)
+                return
 
-        caps = src.capabilities()
-        caps.pop(e.EV_SYN, None)
-        caps.pop(e.EV_FF,  None)
+            caps = src.capabilities()
+            caps.pop(e.EV_SYN, None)
+            caps.pop(e.EV_FF,  None)
 
-        # Advertise the translated (standard) key codes, else SDL maps the
-        # target identity against the source's non-standard codes.
-        if self._button_map and e.EV_KEY in caps:
-            caps[e.EV_KEY] = list(dict.fromkeys(
-                self._button_map.get(c, c) for c in caps[e.EV_KEY]))
+            # Advertise the translated (standard) key codes, else SDL maps the
+            # target identity against the source's non-standard codes.
+            if self._button_map and e.EV_KEY in caps:
+                caps[e.EV_KEY] = list(dict.fromkeys(
+                    self._button_map.get(c, c) for c in caps[e.EV_KEY]))
 
-        try:
-            ui = UInput(events=caps, **self._target)
-        except Exception as ex:
-            print(f"remapper: cannot create uinput: {ex}", file=sys.stderr)
-            return
+            try:
+                ui = UInput(events=caps, **self._target)
+            except Exception as ex:
+                print(f"remapper: cannot create uinput: {ex}", file=sys.stderr)
+                return
 
-        self._ui           = ui
-        self._virtual_path = ui.device.path
+            self._ui           = ui
+            self._virtual_path = ui.device.path
 
-        try:
-            src.grab()
-        except Exception as ex:
-            print(f"remapper: grab failed for {self._src_path}: {ex}", file=sys.stderr)
-            ui.close()
-            return
+            try:
+                src.grab()
+            except Exception as ex:
+                print(f"remapper: grab failed for {self._src_path}: {ex}", file=sys.stderr)
+                return
 
-        print(f"remapper: {src.name} → {self._target['name']} "
-              f"({self._virtual_path})", file=sys.stderr)
+            print(f"remapper: {src.name} → {self._target['name']} "
+                  f"({self._virtual_path})", file=sys.stderr)
 
-        sel = selectors.DefaultSelector()
-        sel.register(src.fileno(), selectors.EVENT_READ)
-        sel.register(self._wake_r,  selectors.EVENT_READ)
-        try:
-            while not self._stop_event.is_set():
-                for key, _ in sel.select():
-                    if key.fd == self._wake_r:        # stop() signalled
-                        self._stop_event.set()
-                        break
-                    for event in src.read():          # all currently queued events
-                        if event.type in (e.EV_KEY, e.EV_ABS, e.EV_REL):
-                            code = event.code
-                            if event.type == e.EV_KEY and self._button_map:
-                                code = self._button_map.get(code, code)
-                            ui.write(event.type, code, event.value)
-                            ui.syn()
-        except OSError:
-            pass
+            sel = selectors.DefaultSelector()
+            sel.register(src.fileno(), selectors.EVENT_READ)
+            sel.register(self._wake_r,  selectors.EVENT_READ)
+            try:
+                while not self._stop_event.is_set():
+                    for key, _ in sel.select():
+                        if key.fd == self._wake_r:        # stop() signalled
+                            self._stop_event.set()
+                            break
+                        for event in src.read():          # all currently queued events
+                            if event.type in (e.EV_KEY, e.EV_ABS, e.EV_REL):
+                                code = event.code
+                                if event.type == e.EV_KEY and self._button_map:
+                                    code = self._button_map.get(code, code)
+                                ui.write(event.type, code, event.value)
+                                ui.syn()
+            except OSError:
+                pass
         finally:
-            sel.close()
-            try: src.ungrab()
-            except Exception: pass
-            try: src.close()
-            except Exception: pass
-            try: ui.close()
-            except Exception: pass
+            if sel is not None:
+                sel.close()
+            if src is not None:
+                try: src.ungrab()
+                except Exception: pass
+                try: src.close()
+                except Exception: pass
+            if ui is not None:
+                try: ui.close()
+                except Exception: pass
             try: os.close(self._wake_r)
             except Exception: pass
             try: os.close(self._wake_w)
