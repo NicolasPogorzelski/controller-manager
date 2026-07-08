@@ -52,8 +52,13 @@ Confirm the gate state directly (replace the node with your controller's, see th
 [verification runbook](../runbooks/verify-remapping.md)):
 
 ```bash
-ls -l /dev/hidrawN     # remapped → c--------- (000) ; native → crw-rw-rw- (666)
+ls -l /dev/hidrawN     # remapped → c--------- (000, no trailing '+')
+                       # native   → crw-rw----+ / crw-rw-rw-+ (open, seat ACL)
 ```
+
+The exact open permissions of a native node come from the distribution's controller udev
+rules (usually `0660`/`0666` plus a seat `uaccess` ACL, shown as a trailing `+`); what
+matters is gated = `000` with no ACL vs. native = readable with the seat ACL.
 
 ## The DualSense lightbar shows the wrong colour after a reconnect
 
@@ -80,9 +85,9 @@ If `multi_intensity` already matches the mode but the **hardware** lightbar does
 (typically completely dark), a raw-HID writer — Steam Input is the usual one — has set the
 pad's lightbar-setup "light out" flag: the firmware then ignores plain colour writes until
 the driver re-probes. Check who holds the pad's hidraw node and see
-[Steam coexistence](decisions/steam-coexistence.md); disabling PlayStation support in the
-Steam client prevents it, and the daemon rearms the pad automatically once the last holder
-exits. If the LED value itself is wrong, check that `controller-led` is installed and
+[Steam coexistence](decisions/steam-coexistence.md) for the required Steam setup; the
+daemon rearms the pad automatically (driver rebind) once the last holder exits, which
+clears the latch. If the LED value itself is wrong, check that `controller-led` is installed and
 authorised (`/etc/sudoers.d/controller-hidraw`) — without it the colour write is a silent
 no-op.
 

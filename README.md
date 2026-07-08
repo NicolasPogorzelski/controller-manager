@@ -89,10 +89,13 @@ hidraw gate helper, its udev rule and its sudoers rule (this step asks for a pas
 For the full procedure with verification and rollback, follow the
 [installation runbook](runbooks/install.md).
 
-**If you use Steam:** disable *Settings → Controller → PlayStation controller support*
-in the Steam client. Games keep their native DualSense features; without the setting the
-Steam client holds the pad permanently and the lightbar status colour cannot show while
-Steam runs. Details and trade-offs: [Steam coexistence](docs/decisions/steam-coexistence.md).
+**If you use Steam:** set *Settings → Controller → PlayStation controller support* to
+**"Enabled in Games w/o Support"** (not "Enabled", not off). The Steam client then holds
+the pad permanently, but the daemon classifies game-vs-idle and restores the resting
+lightbar colour whenever no game runs; titles keep their native DualSense features. Also
+set *Xbox controller support* off. Turning PlayStation support off entirely is the one
+broken middle ground — Steam still opens the pad to identify it and latches the lightbar
+for no benefit. Details and trade-offs: [Steam coexistence](docs/decisions/steam-coexistence.md).
 
 Enable autostart with the desktop session:
 
@@ -146,11 +149,14 @@ pads, over USB and Bluetooth.
   - [Per-device identity](docs/decisions/per-device-identity.md)
   - [Output protocol constraints](docs/decisions/output-protocol-constraints.md)
   - [Steam coexistence & lightbar ownership](docs/decisions/steam-coexistence.md)
+  - [Daemon-owned player numbers](docs/decisions/player-leds.md)
   - [dbusmenu item model](docs/decisions/tray-menu-model.md)
 - [Troubleshooting / known issues](docs/troubleshooting.md)
 - Runbooks:
   - [Installation](runbooks/install.md)
+  - [Update](runbooks/update.md)
   - [Verify a remap](runbooks/verify-remapping.md)
+  - [Verify multi-controller operation](runbooks/verify-multi-controller.md)
 
 ## Contributing
 

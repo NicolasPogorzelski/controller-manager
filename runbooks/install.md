@@ -39,8 +39,9 @@ Enable autostart with the session:
 systemctl --user enable --now controller-manager.service
 ```
 
-If Steam is used on the machine, disable **Settings → Controller → PlayStation
-controller support** in the Steam client — see
+If Steam is used on the machine, set **Settings → Controller → PlayStation controller
+support** to **"Enabled in Games w/o Support"** and **Xbox controller support off** in the
+Steam client (turning PlayStation support off entirely is the one broken state) — see
 [Steam coexistence](../docs/decisions/steam-coexistence.md) for why and what it costs.
 
 ## Verification
