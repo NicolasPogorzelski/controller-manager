@@ -20,7 +20,9 @@ A full deploy (daemon, service, and the root-owned hidraw gate) is done with
 `./install.sh`. See the [installation runbook](runbooks/install.md).
 
 To confirm a change to the remapping path actually works, follow the
-[verification runbook](runbooks/verify-remapping.md).
+[verification runbook](runbooks/verify-remapping.md); for changes touching multi-controller
+behaviour (numbering, per-pad gating, reconnect isolation) use the
+[multi-controller runbook](runbooks/verify-multi-controller.md).
 
 ## Code
 
