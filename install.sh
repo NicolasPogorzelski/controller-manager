@@ -23,6 +23,10 @@ sudo install -m 0755 -o root -g root controller-led         /usr/local/bin/contr
 sudo install -m 0644 -o root -g root 72-controller-manager.rules /etc/udev/rules.d/72-controller-manager.rules
 sudo rm -f /etc/udev/rules.d/71-controller-manager.rules
 sudo udevadm control --reload
+# Replay hidraw events so the new rule is evaluated for already-connected pads
+# too (no markers exist yet, so nodes simply stay open — this only makes the
+# rule effective now instead of at the next reconnect).
+sudo udevadm trigger --subsystem-match=hidraw
 
 # Render the sudoers rule for the installing user, validate it in isolation,
 # then install it. Validating before placement avoids leaving a broken file in
@@ -38,6 +42,14 @@ echo "==> Reload + restart user service"
 systemctl --user daemon-reload
 systemctl --user restart controller-manager.service
 sleep 1
-echo -n "service: "; systemctl --user is-active controller-manager.service
-
-echo "Done."
+# Report the state without aborting on a non-active service (is-active exits
+# non-zero then, which `set -e` would turn into a silent abort BEFORE the
+# hint below). A failed start is usually a missing Python runtime dep.
+if systemctl --user is-active --quiet controller-manager.service; then
+    echo "service: active"
+    echo "Done."
+else
+    echo "service: NOT active" >&2
+    echo "check:  journalctl --user -u controller-manager.service -n 30" >&2
+    exit 1
+fi
