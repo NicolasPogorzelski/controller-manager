@@ -11,7 +11,7 @@
 #
 #   * gate state = marker file /run/controller-manager/gated/<uniq>
 #     (tmpfs: clears itself on reboot, so a stale gate can never survive)
-#   * a udev rule (71-controller-manager.rules) checks the marker via
+#   * a udev rule (72-controller-manager.rules) checks the marker via
 #     `udev-check` and makes gated hidraw nodes be BORN with MODE 0000 and
 #     without the uaccess tag — nothing to race
 #   * block/restore rebind the HID driver, which destroys every open fd on
@@ -66,7 +66,10 @@ find_hid_by_uniq() {
   local dev
   for dev in /sys/bus/hid/devices/*; do
     [[ -r "$dev/uevent" ]] || continue
-    grep -qx "HID_UNIQ=$1" "$dev/uevent" || continue
+    # -F: match the uniq as a LITERAL string. A MAC/serial can contain '.',
+    # which grep would otherwise treat as a regex wildcard and match a
+    # different device's HID_UNIQ line.
+    grep -Fqx "HID_UNIQ=$1" "$dev/uevent" || continue
     echo "$dev"; return 0
   done
   return 1
@@ -98,6 +101,9 @@ case "$action" in
     # uniq: MAC / serial as reported in HID_UNIQ. Conservative charset so the
     # marker filename can never escape MARKER_DIR or carry shell surprises.
     [[ "$arg" =~ ^[A-Za-z0-9:._-]{1,64}$ ]] || die "bad uniq '$arg'"
+    # '.' and '..' pass the charset but name the marker dir itself / its parent;
+    # a real HID_UNIQ is never one of them, so reject them explicitly.
+    [[ "$arg" == "." || "$arg" == ".." ]] && die "bad uniq '$arg'"
     marker="$MARKER_DIR/$arg"
     dev="$(find_hid_by_uniq "$arg" || true)"
 
