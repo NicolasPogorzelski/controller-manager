@@ -148,8 +148,10 @@ both:
   whole mode — restarting the remapper, re-gating the hidraw node and repainting the lightbar.
 
 In `ps5-native` the lightbar has a second legitimate writer: applications with raw HID
-access (games with native DualSense support; Steam enumerates pads even with its
-PlayStation support disabled). The daemon watches the pad's hidraw **holders**: while a
+access (games with native DualSense support; and the Steam client itself, which with the
+required "Enabled in Games w/o Support" setting holds every pad permanently). Because that
+permanent hold no longer separates an idle desktop from a running game, the daemon
+*classifies* game-vs-idle rather than merely counting holders — while a
 game holds the pad the lightbar is its; when the last holder exits, the daemon rearms the
 pad (driver rebind — a raw writer may have firmware-latched the lightbar dark) and
 repaints the resting blue; a reopen shortly after one of our own rebinds (Steam writes its
