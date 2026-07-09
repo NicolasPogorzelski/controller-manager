@@ -70,7 +70,7 @@ python3 -c "import evdev; print(*[evdev.InputDevice(p).name for p in evdev.list_
   shared per-model entry, plus the assigned numbers under `_players`.
 - White player LEDs match the menu numbers — DualSense 1 shows one lit LED, DualSense 2
   two — and stay put through repeated mode switches on either pad (Steam may flash its
-  own count for a few seconds after a switch; the daemon re-asserts within ~8 s; see
+  own count for a few seconds after a switch; the daemon re-asserts within ~6 s; see
   [player-leds](../docs/decisions/player-leds.md)).
 
 **Churn is confined** (after step 4):
