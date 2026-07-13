@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# controller-led — set a DualSense lightbar colour through the kernel LED class
-# (hid-playstation :rgb:indicator) instead of crafting raw HID output reports.
-# The raw-hidraw path races the driver and gets dropped over Bluetooth, leaving
-# the lightbar on its firmware default; going through the driver is reliable.
+# controller-led — DualSense LED helper for the controller-manager daemon.
 #
-#   controller-led <ledname> <r> <g> <b>        # lightbar, each channel 0-255
-#   controller-led player <inputN> <1-4>        # white player-LED pattern
+#   controller-led lightbar-raw <hidrawN> <r> <g> <b>  # lightbar via raw HID
+#   controller-led <ledname> <r> <g> <b>               # lightbar via LED class
+#   controller-led player <inputN> <1-4>               # white player-LED pattern
 #
-# Safety: only a *:rgb:indicator / *:white:player-N LED that belongs to a Sony
-# (054C) HID device is ever written, so this can't be aimed at unrelated LEDs
-# (keyboard, NIC, …). Meant to be invoked through a tightly-scoped NOPASSWD
-# sudoers rule.
+# The lightbar is driven with a RAW HID output report (lightbar-raw). Unlike a
+# kernel LED-class write, a raw colour report also clears the DualSense firmware
+# "light out" latch, so the colour reaches the hardware even after a raw-HID
+# consumer (Steam Input) has latched the pad dark — the LED-class write updates
+# the sysfs node but leaves such a latched lightbar physically off. The old
+# LED-class path (<ledname>) is kept for reference/compat. The white player LEDs
+# go through the LED class, which drives them reliably.
+#
+# Safety: only a *:rgb:indicator / *:white:player-N LED or a /dev/hidrawN node
+# that belongs to a Sony (054C) HID device is ever written, so this can't be
+# aimed at unrelated LEDs/devices (keyboard, NIC, …). Meant to be invoked
+# through a tightly-scoped NOPASSWD sudoers rule.
 
 set -euo pipefail
 
@@ -43,6 +49,52 @@ if [[ "${1:-}" == "player" ]]; then
   done
   echo "controller-led: $prefix player -> $n"
   exit 0
+fi
+
+if [[ "${1:-}" == "lightbar-raw" ]]; then
+  node="${2:-}"; r="${3:-}"; g="${4:-}"; b="${5:-}"
+  # A plain /dev/hidrawN node (no path traversal, no other class).
+  [[ "$node" =~ ^/dev/hidraw[0-9]+$ ]] || { echo "bad hidraw '$node'" >&2; exit 2; }
+  # Node already gone (controller disconnected mid-write) — nothing to do.
+  [[ -e "$node" ]] || { echo "$node absent, nothing to do"; exit 0; }
+  for v in "$r" "$g" "$b"; do
+    { [[ "$v" =~ ^[0-9]+$ ]] && (( v <= 255 )); } || { echo "bad channel '$v'" >&2; exit 2; }
+  done
+  ue="/sys/class/hidraw/$(basename "$node")/device/uevent"
+  sony_ok "$ue" || exit 3
+  # Bus from HID_ID=BUS:0000VVVV:0000PPPP — 0005 Bluetooth (report 0x31 + CRC),
+  # 0003 USB (report 0x02, no CRC): the two wire formats differ.
+  bus="$(sed -n 's/^HID_ID=\([0-9A-Fa-f]*\):.*/\1/p' "$ue")"
+  if python3 - "$node" "$bus" "$r" "$g" "$b" <<'PY'
+import sys, zlib
+node = sys.argv[1]
+bt = int(sys.argv[2], 16) == 5              # BUS_BLUETOOTH
+r, g, b = (int(x) & 0xff for x in sys.argv[3:6])
+# DualSense output_report_common: valid_flag1 bit2 = LIGHTBAR_CONTROL, the
+# lightbar RGB sit at the tail. A colour report with this flag both sets the
+# colour AND clears the firmware "light out" latch.
+common = bytearray(47)
+common[1] = 0x04                            # valid_flag1: LIGHTBAR_CONTROL
+common[44], common[45], common[46] = r, g, b
+if bt:                                       # BT: 0x31, seq_tag, tag, CRC32 tail
+    rep = bytearray(78)
+    rep[0], rep[1], rep[2] = 0x31, 0x00, 0x10
+    rep[3:3 + 47] = common
+    crc = zlib.crc32(bytes([0xA2]) + bytes(rep[0:74])) & 0xffffffff  # seed 0xA2
+    rep[74:78] = crc.to_bytes(4, "little")
+else:                                        # USB: 0x02, no CRC
+    rep = bytearray(48)
+    rep[0] = 0x02
+    rep[1:1 + 47] = common
+with open(node, "wb") as f:
+    f.write(bytes(rep))
+PY
+  then
+    echo "controller-led: lightbar-raw $node -> $r $g $b (bus $bus)"
+    exit 0
+  fi
+  echo "lightbar-raw: write to $node failed" >&2
+  exit 1
 fi
 
 led="${1:-}"; r="${2:-}"; g="${3:-}"; b="${4:-}"

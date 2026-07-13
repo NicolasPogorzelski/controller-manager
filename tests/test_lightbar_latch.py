@@ -50,9 +50,10 @@ player_calls = []
 
 cm.hidraw_gate = lambda action, uniq, nodes: gate_calls.append(action)
 cm.hidraw_holders = lambda nodes: set(holders[0])
-cm.led_set = lambda led, rgb: led_calls.append(rgb)
+cm.led_set_raw = lambda hidraw, rgb: led_calls.append(rgb)
 cm.led_set_player = lambda prefix, player: player_calls.append((prefix, player))
 cm.led_indicator_for_event = lambda path: "input132:rgb:indicator" if path else None
+cm.hidraw_for_event = lambda path: ["/dev/hidraw1"] if path else []
 cm.scan_controllers = lambda exclude_paths=frozenset(): [
     {"path": "event17", "name": "DualSense", "vendor": 0x054c,
      "product": 0x0ce6, "family": "ps5", "uniq": UNIQ, "phys": "",
@@ -87,7 +88,7 @@ inst.apply_mode(adopt=True)
 check(gate_calls == ["restore", "rearm"],
       "restore (no-op for a fresh identity), then a forced rearm")
 check(led_calls == [(0, 0, 255)],
-      "resting blue written after the rearm cleared the latch")
+      "resting blue written (raw colour write clears the latch)")
 
 # ── Scenario B: the delayed repaint re-asserts the colour ────────────────────
 print("Scenario B: one-shot repaint fires ~6 s later (post-rebind BT drop)")

@@ -69,9 +69,10 @@ led_calls = []
 cm.hidraw_gate = lambda action, uniq, nodes: gate_calls.append(action)
 cm.hidraw_holders = lambda nodes: set(holders[0])
 cm.is_steam_client = lambda pid: pid in STEAM_PIDS
-cm.led_set = lambda led, rgb: led_calls.append(rgb)
+cm.led_set_raw = lambda hidraw, rgb: led_calls.append(rgb)
 cm.led_set_player = lambda prefix, player: None
 cm.led_indicator_for_event = lambda path: "input21:rgb:indicator" if path else None
+cm.hidraw_for_event = lambda path: ["/dev/hidraw0"] if path else []
 cm.scan_controllers = lambda exclude_paths=frozenset(): [
     {"path": "event5", "name": "DualSense", "vendor": 0x054c,
      "product": 0x0ce6, "family": "ps5", "uniq": UNIQ, "phys": "",

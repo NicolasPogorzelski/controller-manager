@@ -137,9 +137,12 @@ check(inst.rebinds == 1,     "reconnect on reused path -> rebind() (mode re-asse
 print("Scenario E: :rgb:indicator node absent at bind time -> applied once it appears")
 led_calls = []
 cm.hidraw_gate = lambda *a, **k: None          # no sudo/hidraw in the test
-cm.led_set     = lambda led, rgb: led_calls.append((led, rgb))
+cm.led_set_raw = lambda hidraw, rgb: led_calls.append(rgb)
 resolver = [None]                              # what led_indicator_for_event returns
 cm.led_indicator_for_event = lambda path: resolver[0]
+# The hidraw node the lightbar is written to renumbers together with the
+# rgb-indicator node, so track the same resolver (non-empty only when present).
+cm.hidraw_for_event = lambda path: [resolver[0]] if resolver[0] else []
 
 # Pad (re)binds while the driver has not created the LED node yet.
 inst = RealInst("event30", "DualSense", 0x054c, 0x0ce6,
@@ -152,7 +155,7 @@ check(inst.led is None and not led_calls,
 resolver[0] = "input30:rgb:indicator"          # driver has now created the node
 inst.refresh_led()
 check(inst.led == "input30:rgb:indicator",     "node appeared -> led resolved")
-check(led_calls == [("input30:rgb:indicator", (0, 0, 255))],
+check(led_calls == [(0, 0, 255)],
       "colour applied exactly once (blue = ps5-native)")
 
 inst.refresh_led()                             # further ticks must not re-write
@@ -173,7 +176,7 @@ check(not led_calls,                       "construct itself does not paint")
 resolver[0] = "input44:rgb:indicator"          # reconnect renumbered the node
 inst.refresh_led()
 check(inst.led == "input44:rgb:indicator", "renumbered node picked up on next tick")
-check(led_calls == [("input44:rgb:indicator", (0, 128, 0))],
+check(led_calls == [(0, 128, 0)],
       "NEW node repainted exactly once (green = ps5-xbox)")
 
 inst.refresh_led()                             # node stable now

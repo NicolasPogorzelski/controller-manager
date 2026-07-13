@@ -241,20 +241,29 @@ def led_indicator_for_event(ev_path):
     nodes = glob.glob(os.path.join(hid_dir, "leds", "*:rgb:indicator"))
     return os.path.basename(nodes[0]) if nodes else None
 
-def led_set(led, rgb):
-    """Set the lightbar colour via the kernel LED class (root helper).
-    No-op when there is no such LED or the helper/sudo rule is missing."""
-    if not led or not os.path.exists(LED_BIN):
+def led_set_raw(hidraw_nodes, rgb):
+    """Set the DualSense lightbar via a raw HID output report (root helper).
+    Unlike a kernel LED-class write, a raw colour report also clears the pad's
+    firmware 'light out' latch — the state Steam Input leaves behind while it
+    holds the pad — so the colour actually reaches the hardware instead of only
+    updating the sysfs LED node (which stays a physical no-op once latched).
+    Tries the pad's hidraw node(s) until the helper accepts one (a DualSense
+    exposes a single hidraw). No-op without a node or the helper/sudo rule."""
+    if not hidraw_nodes or not os.path.exists(LED_BIN):
         return
     r, g, b = rgb
-    try:
-        subprocess.run(
-            ["sudo", "-n", LED_BIN, led, str(r), str(g), str(b)],
-            timeout=5, check=False,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except Exception as ex:
-        print(f"led_set: {led} failed: {ex}", file=sys.stderr)
+    for node in hidraw_nodes:
+        try:
+            res = subprocess.run(
+                ["sudo", "-n", LED_BIN, "lightbar-raw", node,
+                 str(r), str(g), str(b)],
+                timeout=5, check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if res.returncode == 0:
+                return
+        except Exception as ex:
+            print(f"led_set_raw: {node} failed: {ex}", file=sys.stderr)
 
 
 def led_set_player(prefix, player):
@@ -562,21 +571,21 @@ class ControllerInstance:
     # ── LED lightbar ─────────────────────────────────────────────────────────
 
     def _apply_led(self):
-        """Set the lightbar colour for the current mode via the kernel LED class
-        (hid-playstation …:rgb:indicator). Re-resolves the node from the live
-        evdev path on every call and never trusts the cached name: the LED node is
-        renumbered on every (BT) reconnect, so a stale name would make the write
-        land on a now-dead node. No-op for Xbox pads or when no node resolves."""
+        """Set the lightbar colour for the current mode via a raw HID output
+        report (hidraw), which also clears the DualSense firmware 'light out'
+        latch — a kernel LED-class write does not, so a latched pad would stay
+        physically dark. Re-resolves the live nodes from the evdev path on every
+        call and never trusts a cached name: both the hidraw and the
+        …:rgb:indicator node renumber on every (BT) reconnect. No-op for Xbox
+        pads or when nothing resolves."""
         if self.family != "ps5":
             return
         # Every apply (whatever triggered it) pushes the next slow re-assert
         # out by one full period — the assert is a backstop, not a metronome.
         self._assert_at = time.monotonic() + 15.0
-        led = led_indicator_for_event(self.path)
-        if not led:
-            return
-        self.led = led
-        led_set(led, MODE_LED.get(self.mode, (0, 0, 0)))
+        # Track the rgb-indicator node name so refresh_led can spot a renumber.
+        self.led = led_indicator_for_event(self.path)
+        led_set_raw(hidraw_for_event(self.path), MODE_LED.get(self.mode, (0, 0, 0)))
         self._apply_player_leds()
 
     def _apply_player_leds(self):

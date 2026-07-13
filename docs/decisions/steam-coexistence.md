@@ -5,10 +5,16 @@
 Steam Input opens every controller's `/dev/hidraw*` node the moment it connects — even
 with no game running, minimized to the tray. Through that handle it reads input and
 writes output reports; on a DualSense it routinely sets the lightbar-setup **"light
-out"** flag, a state that lives in the pad's firmware: from then on plain colour writes
-(including the kernel LED-class writes this daemon uses) change nothing until the driver
-re-probes the pad. Games with native DualSense support (SDL hidapi — most modern titles,
-under Steam, Lutris or bare Wine/Proton alike) behave the same way while they run.
+out"** flag, a state that lives in the pad's firmware. A kernel **LED-class** write then
+changes nothing while that latch holds (the sysfs node updates, the hardware stays dark)
+— so the daemon drives the lightbar with a **raw HID colour report** instead
+(`controller-led lightbar-raw`, report 0x31/CRC over BT, 0x02 over USB): a raw colour
+report both sets the colour *and* clears the latch, so the status colour reaches the
+hardware even after Steam has latched the pad, without depending on a driver re-probe.
+(Field note 2026-07-13: on kernel 7.0.14 a driver rebind did **not** clear the latch —
+only a raw colour report or a pad power-cycle did; the raw path removes that dependency.)
+Games with native DualSense support (SDL hidapi — most modern titles, under Steam,
+Lutris or bare Wine/Proton alike) behave the same way while they run.
 
 So there are two legitimate writers for one lightbar, and "the daemon's status colour"
 and "the game's lightbar effects" cannot both win at the same time.
@@ -45,9 +51,10 @@ Rewriting an unchanged colour through the kernel LED class is visually a no-op, 
 this is *not* the flickering paint war that per-tick enforcement against a running
 game's effects would be (that remains rejected, see below):
 
-- **a raw fd closed** (direct-access game exited, Steam quit): the firmware may now
-  be latched dark → *rearm* (driver rebind → fresh lightbar setup) and repaint.
-  Deferred while a game is still active — the rebind would yank running fds;
+- **a raw fd closed** (direct-access game exited, Steam quit): *rearm* (driver rebind,
+  which revokes any lingering fd) and repaint. The repaint itself now clears any "light
+  out" latch (raw colour report), so recovery no longer hinges on the rebind; the rebind
+  is still deferred while a game is active — it would yank running fds;
 - **a Steam Input game exited without any fd closing**: the client restores its slot
   colour on the way out → one repaint ~3 s later gets the last word, no rearm needed;
 - **the client (re)opened the pad** (enumeration after one of our rebinds, or a
