@@ -70,11 +70,17 @@ import sys, zlib
 node = sys.argv[1]
 bt = int(sys.argv[2], 16) == 5              # BUS_BLUETOOTH
 r, g, b = (int(x) & 0xff for x in sys.argv[3:6])
-# DualSense output_report_common: valid_flag1 bit2 = LIGHTBAR_CONTROL, the
-# lightbar RGB sit at the tail. A colour report with this flag both sets the
-# colour AND clears the firmware "light out" latch.
+# DualSense output_report_common. valid_flag1 bit2 = LIGHTBAR_CONTROL sets the
+# colour; valid_flag2 bit1 = LIGHTBAR_SETUP_CONTROL_ENABLE with lightbar_setup=0
+# ("normal", not LIGHT_OUT=2) re-enables the bar. Both are needed: some DualSense
+# firmwares light up on LIGHTBAR_CONTROL alone, others ignore a plain colour
+# while latched and only obey it together with the setup flag (field-observed
+# across two pads, 2026-07-13). Sending both clears the "light out" latch and
+# sets the colour on either firmware.
 common = bytearray(47)
-common[1] = 0x04                            # valid_flag1: LIGHTBAR_CONTROL
+common[1]  = 0x04                           # valid_flag1: LIGHTBAR_CONTROL
+common[38] = 0x02                           # valid_flag2: LIGHTBAR_SETUP_CONTROL_ENABLE
+common[41] = 0x00                           # lightbar_setup: 0 = normal/on
 common[44], common[45], common[46] = r, g, b
 if bt:                                       # BT: 0x31, seq_tag, tag, CRC32 tail
     rep = bytearray(78)
