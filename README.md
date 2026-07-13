@@ -84,10 +84,10 @@ cd controller-manager
 ./install.sh
 ```
 
-`install.sh` deploys the user-space daemon and service, then installs the root-owned
-hidraw gate helper, its udev rule and its sudoers rule (this step asks for a password).
-For the full procedure with verification and rollback, follow the
-[installation runbook](runbooks/install.md).
+`install.sh` deploys the user-space daemon and service, enables it for autostart with the
+session, then installs the root-owned hidraw gate helper, its udev rule and its sudoers rule
+(this step asks for a password). For the full procedure with verification and rollback,
+follow the [installation runbook](runbooks/install.md).
 
 **If you use Steam:** set *Settings → Controller → PlayStation controller support* to
 **"Enabled in Games w/o Support"** (not "Enabled", not off). The Steam client then holds
@@ -96,12 +96,6 @@ lightbar colour whenever no game runs; titles keep their native DualSense featur
 set *Xbox controller support* off. Turning PlayStation support off entirely is the one
 broken middle ground — Steam still opens the pad to identify it and latches the lightbar
 for no benefit. Details and trade-offs: [Steam coexistence](docs/decisions/steam-coexistence.md).
-
-Enable autostart with the desktop session:
-
-```bash
-systemctl --user enable --now controller-manager.service
-```
 
 ## Usage
 

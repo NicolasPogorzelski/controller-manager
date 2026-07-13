@@ -31,13 +31,8 @@ cd controller-manager
      `udevadm control --reload` — gated hidraw nodes must be born inaccessible
    - `controller-hidraw.sudoers` → `/etc/sudoers.d/controller-hidraw` (root, `0440`)
    - `visudo -c` to validate the sudoers files
-3. **Service**: `daemon-reload` and restart, then prints the active state.
-
-Enable autostart with the session:
-
-```bash
-systemctl --user enable --now controller-manager.service
-```
+3. **Service**: `daemon-reload`, `enable` (autostart with the session) and restart, then
+   prints the active state.
 
 If Steam is used on the machine, set **Settings → Controller → PlayStation controller
 support** to **"Enabled in Games w/o Support"** and **Xbox controller support off** in the

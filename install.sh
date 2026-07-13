@@ -38,8 +38,12 @@ sudo visudo -cf "$rendered_sudoers"
 sudo install -m 0440 -o root -g root "$rendered_sudoers" /etc/sudoers.d/controller-hidraw
 sudo visudo -c
 
-echo "==> Reload + restart user service"
+echo "==> Reload + enable (autostart) + restart user service"
 systemctl --user daemon-reload
+# enable (without --now) links the service into the session's autostart so it
+# comes up on the next login; restart applies the freshly installed code to the
+# already-running instance (which enable --now would leave untouched).
+systemctl --user enable controller-manager.service
 systemctl --user restart controller-manager.service
 sleep 1
 # Report the state without aborting on a non-active service (is-active exits
