@@ -2,6 +2,26 @@
 
 Short, rolling list of where this project stands and what comes next. Newest status on top.
 
+## Status — 2026-07-15: phantom pad in a dual remap — root-caused, deferred
+
+With two DualSense both in `ps5-xbox`, Steam lists a **fifth, phantom** PlayStation pad —
+appearing the moment the *second* pad is emulated, always the second regardless of which
+physical pad. **Root-caused on hardware and confirmed harmless:** the hidraw gate holds on
+both pads (both nodes `000`, no holder); the phantom is the second pad's **evdev** node,
+which Steam re-opens and lists during the second `ps5-xbox` transition's driver rebind. The
+remapper's `EVIOCGRAB` still holds it, so it is **inert** — `evtest` reports the node
+grabbed, no events leak, no double input.
+
+`EVIOCGRAB` hides events, not enumeration, and no lightweight robust fix exists: the daemon
+is a `--user` service sharing Steam's UID, so any evdev permission/ACL barrier that blocks
+Steam also blocks the remapper's own grab. **Decision: document and defer** — the phantom is
+cosmetic, and the only robust fix (born-gate the evdev node + a root helper that hands the
+grabbed fd to the daemon via `SCM_RIGHTS` + a raw-read remapper path) expands a
+security-sensitive privileged surface for a dead list entry. A game-side slot test is
+pending; escalate only if the phantom proves functionally harmful (stolen player slot /
+reordered controllers). Full analysis: `docs/decisions/evdev-enumeration-leak.md`;
+symptom + verification: `docs/troubleshooting.md`.
+
 ## Status — 2026-07-06 (evening): full Steam ownership in native mode
 
 The SDL ignore-vars workaround from the afternoon (below) is **superseded**: the
@@ -130,3 +150,11 @@ is reused while `inputN`-derived nodes (the `:rgb:indicator` LED) renumber. The 
   thread (worker/queue) with per-instance locking so the reconcile can't race the same pad.
   Deferred deliberately: it is an invasive concurrency change with real regression risk and
   needs hardware to verify, and the visible cost on a single-user desktop tray is small.
+- **Phantom pad in a dual `ps5-xbox` remap (deferred, 2026-07-15):** Steam lists a fifth,
+  inert PlayStation pad once the second DualSense is emulated — its physical evdev node,
+  re-opened by Steam during the second transition's driver rebind. `EVIOCGRAB` keeps it
+  input-dead (no double input), so it is cosmetic. No lightweight robust fix exists (the
+  daemon shares Steam's UID, so an evdev permission barrier locks out the remapper too); the
+  robust fix is a root fd-passing grab with a born-gated evdev node. Deferred pending a
+  game-side slot test — escalate only on functional harm. Full write-up:
+  `docs/decisions/evdev-enumeration-leak.md`.
