@@ -111,6 +111,13 @@ is reused while `inputN`-derived nodes (the `:rgb:indicator` LED) renumber. The 
 - **LED write race vs Steam Input (residual):** a single LED write at the exact instant of
   reconnect can be overwritten as the pad comes up; the re-assert one poll later is what makes
   the colour stick — best-effort, not a hard guarantee. Not a new bug.
+- **Lightbar reclaim from a persistently-holding Steam client (investigate, #9):** the
+  latch-heal rebind only fires when a hidraw holder *closes* its fd; the idle Steam client
+  never does, so a firmware "light out" latch it set may not be reclaimed without a pad
+  power-cycle. Not a confirmed standing bug — normal operation wins against a running Steam;
+  the dark state was seen only under abnormal churn. Needs a clean-room reproduction before
+  any fix (candidate: rate-limited rearm gated to the idle-client case; cost: input hitch).
+  See GitHub Issue #9.
 - **Remapper liveness on sub-poll blips (resolved 2026-07-05):** a BT blip shorter than one
   2 s poll can kill the remapper's grab without the pad appearing absent. The reconcile now
   checks `remap_healthy()` on every present pad and restarts the remapper when the mode wants
