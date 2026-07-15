@@ -850,6 +850,21 @@ class ControllerInstance:
 # returns within the window is rebound in place instead of removed and re-added.
 REMOVE_GRACE = 5.0   # seconds; ~2× the 2 s poll interval
 
+# Grace before a GAP in the player numbering (a pad switched off long enough to
+# be dropped) is compacted away, closing the hole so the remaining players are
+# renumbered to a contiguous 1..N. Deliberately long: a controller whose
+# battery/accu dies and is swapped returns within this window, reclaims its old
+# number (see _poll's adoption path) and never triggers a renumber — only a pad
+# that stays off past it gives up its slot. Auto-compaction lives in _poll; the
+# tray 'Renumber players' entry forces it immediately.
+COMPACT_GRACE = 300.0   # seconds (5 minutes)
+
+def _numbering_gap(players):
+    """True when a set of player numbers is not a contiguous 1..N — i.e. a
+    removed pad left a hole compaction can close. Falsy numbers are ignored."""
+    nums = sorted(p for p in players if p)
+    return nums != list(range(1, len(nums) + 1))
+
 class ControllerManager:
     def __init__(self, on_change_cb):
         self._lock       = threading.Lock()
@@ -857,6 +872,9 @@ class ControllerManager:
         self._config     = load_config()
         self._on_change  = on_change_cb   # called (from thread) when list changes
         self._monitor_th = threading.Thread(target=self._monitor, daemon=True)
+        # Monotonic deadline at which a standing numbering gap is compacted, or
+        # None when the numbers are contiguous. Armed/cleared each _poll pass.
+        self._compact_due = None
 
     def start(self):
         # Populate instances synchronously so the first menu we publish already
@@ -960,6 +978,22 @@ class ControllerManager:
                 churned = True
             if churned:
                 self._arm_player_reassert()
+            # Auto-compaction: once a dropped pad leaves the connected numbers
+            # non-contiguous, close the gap after COMPACT_GRACE — long enough
+            # for a battery/accu swap to return and reclaim the number first,
+            # so a brief power-off never renumbers the remaining players. A gap
+            # that heals on its own (pad came back) disarms the timer.
+            if self._gap_present():
+                if self._compact_due is None:
+                    self._compact_due = now + COMPACT_GRACE
+                elif now >= self._compact_due:
+                    if self._renumber_locked():
+                        self._arm_player_reassert()
+                        changed = True
+                        config_dirty = True
+                    self._compact_due = None
+            else:
+                self._compact_due = None
         if config_dirty:
             save_config(self._config)
         if changed:
@@ -1006,6 +1040,47 @@ class ControllerManager:
             if inst.family == "ps5":
                 inst._player_repaint_at = time.monotonic() + 6.0
 
+    def _gap_present(self):
+        """True when the connected pads' player numbers are not a contiguous
+        1..N. Caller holds the lock."""
+        return _numbering_gap(i.player for i in self._instances.values())
+
+    def _renumber_locked(self):
+        """Compact the connected pads' player numbers to a contiguous 1..N,
+        preserving their relative order: the numbers shift, but two continuously
+        connected pads never swap places and nobody overtakes anybody. The
+        stale reservations of absent pads in _players are left untouched — a
+        returning pad finds its old number now worn by a lower-numbered peer,
+        so it takes the next free one instead of reopening the closed gap.
+        Returns True if any number changed. Caller holds the lock and is
+        responsible for persisting the config and notifying afterwards."""
+        changed = False
+        ordered = sorted((i for i in self._instances.values() if i.player),
+                         key=lambda i: i.player)
+        for new_num, inst in enumerate(ordered, start=1):
+            if inst.player != new_num:
+                inst.player = new_num
+                self._config.setdefault("_players", {})[inst.ident] = new_num
+                changed = True
+        return changed
+
+    def renumber(self):
+        """Compact player numbers now (order-preserving), bypassing the
+        auto-compaction timer. Driven by the tray 'Renumber players' entry."""
+        with self._lock:
+            changed = self._renumber_locked()
+            if changed:
+                self._arm_player_reassert()
+            self._compact_due = None
+            instances = list(self._instances.values())
+        if changed:
+            save_config(self._config)
+            # Immediate feedback on the white player LEDs; the armed re-assert
+            # above outlasts Steam's slot rewrite a few seconds later.
+            for inst in instances:
+                inst._apply_player_leds()
+            GLib.idle_add(self._on_change)
+
     def set_mode(self, ident, mode):
         with self._lock:
             inst = self._instances.get(ident)
@@ -1040,6 +1115,7 @@ class DbusmenuServer(dbus.service.Object):
         # GetLayout and its Event, misrouting the click.
         self._items    = []    # ordered [(id, props-dict)], Quit last
         self._lookup   = {}    # id → (controller ident, mode) for radio items
+        self._actions  = {}    # id → action name for plain command items
         self._sig      = None  # structural signature of the cached model
         # Item ids come from this counter and are NEVER reused for a different
         # item. The GNOME appindicator host caches item properties per id and
@@ -1100,6 +1176,11 @@ class DbusmenuServer(dbus.service.Object):
                                     MODE_LABELS[mode], inst.mode == mode))
                 if inst is not instances[-1]:
                     sem.append(("sep",))
+        # Offer a manual compaction only while a gap actually exists — with a
+        # contiguous numbering the entry would be a no-op and just clutter.
+        if _numbering_gap(getattr(i, "player", None) for i in instances):
+            sem.append(("sep",))
+            sem.append(("action", "renumber", "Renumber players"))
         sem.append(("sep",))   # final separator before Quit
         return sem
 
@@ -1117,6 +1198,9 @@ class DbusmenuServer(dbus.service.Object):
                     "enabled":      dbus.Boolean(True),
                     "toggle-type":  dbus.String("radio"),
                     "toggle-state": dbus.Int32(1 if entry[4] else 0)}
+        if kind == "action":
+            return {"label":   dbus.String(entry[2]),
+                    "enabled": dbus.Boolean(True)}
         return {"type": dbus.String("separator")}
 
     @staticmethod
@@ -1130,6 +1214,8 @@ class DbusmenuServer(dbus.service.Object):
                 sig.append(("radio", entry[1], entry[2]))
             elif entry[0] == "header":
                 sig.append(("header", entry[1]))
+            elif entry[0] == "action":
+                sig.append(("action", entry[1]))
             else:
                 sig.append((entry[0],))
         return tuple(sig)
@@ -1142,7 +1228,7 @@ class DbusmenuServer(dbus.service.Object):
         sig = self._structure_sig(sem)
 
         if sig != self._sig:
-            items, lookup = [], {}
+            items, lookup, actions = [], {}, {}
             for entry in sem:
                 if self._next_id == QUIT_ID:   # never hand out the Quit id
                     self._next_id += 1
@@ -1151,11 +1237,14 @@ class DbusmenuServer(dbus.service.Object):
                 items.append((id_, self._props_for(entry)))
                 if entry[0] == "radio":
                     lookup[id_] = (entry[1], entry[2])
+                elif entry[0] == "action":
+                    actions[id_] = entry[1]
             # Quit is the one constant item: same kind, label and props
             # forever, so its well-known id is safe to keep.
             items.append((QUIT_ID, {"label":   dbus.String("Quit"),
                                     "enabled": dbus.Boolean(True)}))
             self._items, self._lookup, self._sig = items, lookup, sig
+            self._actions = actions
             self._revision += 1
             self.LayoutUpdated(dbus.UInt32(self._revision), dbus.Int32(0))
             return
@@ -1245,6 +1334,9 @@ class DbusmenuServer(dbus.service.Object):
         if hit:
             ctrl_ident, mode = hit
             self._mgr.set_mode(ctrl_ident, mode)
+            return
+        if self._actions.get(int(id_)) == "renumber":
+            self._mgr.renumber()
 
     @dbus.service.method("com.canonical.dbusmenu",
                          in_signature="a(isvu)", out_signature="ai")
