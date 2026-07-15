@@ -10,6 +10,7 @@ Multiple controllers simultaneously, each with its own mode.
 """
 
 import os, sys, json, signal, threading, time, subprocess, glob, selectors
+import traceback
 import evdev
 from evdev import UInput, ecodes as e
 import dbus, dbus.service, dbus.mainloop.glib
@@ -193,7 +194,12 @@ LED_BIN  = "/usr/local/bin/controller-led"
 
 def hidraw_for_event(ev_path):
     """Return all /dev/hidrawN nodes for the HID device behind an evdev node.
-    Returns an empty list when the device exposes no hidraw (e.g. xpad)."""
+    Returns an empty list when the device exposes no hidraw (e.g. xpad) or when
+    the pad's node has gone (ev_path None — _refresh_nodes drops the path when a
+    pad does not re-enumerate in time, and a resting-colour apply can race that).
+    Guarded like led_indicator_for_event, whose callers already tolerate None."""
+    if not ev_path:
+        return []
     base = f"/sys/class/input/{os.path.basename(ev_path)}/device"
     if not os.path.exists(base):
         return []
@@ -974,9 +980,18 @@ class ControllerManager:
         return changed
 
     def _monitor(self):
+        # A single unhandled exception in _poll would otherwise kill this daemon
+        # thread for good: hotplug adoption, removal and the resting-colour watch
+        # all stop silently while the D-Bus main loop keeps answering menu clicks,
+        # so the tray looks alive but never updates again (a stale pad path once
+        # crashed hidraw_for_event here and froze the whole daemon). Log and carry
+        # on; the next tick retries from a fresh scan.
         while True:
             time.sleep(2)
-            self._poll()
+            try:
+                self._poll()
+            except Exception:
+                traceback.print_exc()
 
     def get_instances(self):
         with self._lock:
