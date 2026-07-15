@@ -28,6 +28,33 @@ sudo udevadm control --reload
 # rule effective now instead of at the next reconnect).
 sudo udevadm trigger --subsystem-match=hidraw
 
+# HID-BPF report-descriptor fixup for the Bluetooth Xbox pad reporting product
+# 0x02FD. Its firmware advertises a truncated (unbalanced) HID descriptor that
+# no driver can parse, so the pad produces no input node at all and is invisible
+# to everything downstream (see docs/decisions/xbox-02fd-hid-bpf.md). The fixup
+# appends the two missing END_COLLECTION bytes so the descriptor parses.
+#
+# This needs a build toolchain (clang/bpftool/libbpf-devel), udev-hid-bpf, and a
+# BTF-enabled kernel. It only matters if you own that specific pad, so a missing
+# prerequisite is a skip-with-warning, not a failure — DualSense-only setups are
+# unaffected.
+if command -v udev-hid-bpf >/dev/null 2>&1; then
+    if bpf_o="$(./hid-bpf/build.sh)"; then
+        echo "==> HID-BPF (Xbox 02FD descriptor fixup) — sudo required"
+        sudo udev-hid-bpf install --force "hid-bpf/$bpf_o"
+        # Attach to an already-connected 02FD pad without a reconnect (the udev
+        # rule otherwise only fires on the next add event).
+        sudo udevadm control --reload
+        sudo udevadm trigger --action=add --subsystem-match=hid
+    else
+        echo "note: skipping Xbox 02FD HID-BPF fixup (build prerequisites missing;" >&2
+        echo "      see hid-bpf/build.sh output above). Only affects the 0x02FD pad." >&2
+    fi
+else
+    echo "note: udev-hid-bpf not installed — skipping Xbox 02FD HID-BPF fixup." >&2
+    echo "      Fedora: sudo dnf install udev-hid-bpf clang bpftool libbpf-devel" >&2
+fi
+
 # Render the sudoers rule for the installing user, validate it in isolation,
 # then install it. Validating before placement avoids leaving a broken file in
 # /etc/sudoers.d.

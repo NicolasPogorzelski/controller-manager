@@ -97,6 +97,36 @@ This is the Xbox→PlayStation direction, which is intentionally **not offered**
 this reason — see [output protocol constraints](decisions/output-protocol-constraints.md).
 The supported directions are PlayStation→Xbox and the two native modes.
 
+## A Bluetooth controller is paired and connected but never appears in the tray
+
+If a pad shows as `Connected` in `bluetoothctl` (with the HID service) yet is listed by no
+game and never appears in the tray, first check whether it produced an input device at all:
+
+```bash
+ls /dev/input/js*                          # is there a js node for it?
+for d in /sys/class/input/js*; do echo "$d $(cat $d/device/name)"; done
+```
+
+No node means no driver bound. A common cause on some Xbox pads is a **malformed HID report
+descriptor** the kernel refuses to parse:
+
+```bash
+sudo dmesg | grep -i 'unbalanced collection'
+# playstation/xpadneo 0005:045E:02FD.*: unbalanced collection at end of report description
+# ... probe with driver <x> failed with error -22
+```
+
+For the specific Bluetooth Xbox pad reporting product `0x02FD` this is a firmware bug fixed
+by the bundled HID-BPF descriptor fixup — make sure it installed (`install.sh` skips it with
+a warning if the build toolchain is missing):
+
+```bash
+udev-hid-bpf list-devices | grep -i xbox   # should show the pad matched to the fixup
+```
+
+See [the Xbox 0x02FD HID-BPF decision](decisions/xbox-02fd-hid-bpf.md) for the full story
+and manual build/install steps.
+
 ## Buttons are mapped to the wrong positions
 
 Some controllers expose a non-standard evdev button layout. The remapper carries a
