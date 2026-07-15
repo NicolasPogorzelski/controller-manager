@@ -216,8 +216,9 @@ menu.LayoutUpdated = lambda rev, parent: None
 menu.ItemsPropertiesUpdated = lambda updated, removed: None
 menu.notify_update()
 check(sorted({i for i, _ in menu._lookup.values()})
-      == ["AA:AA", "BB:BB", "phys:u1", "phys:u2"],
-      "every pad has its own clickable mode items")
+      == ["AA:AA", "BB:BB"],
+      "multi-mode pads (DualSense) have clickable radios; single-mode "
+      "pads (Xbox) do not")
 ds2_xbox = next(i for i, hit in menu._lookup.items()
                 if hit == ("BB:BB", "ps5-xbox"))
 menu.Event(ds2_xbox, "clicked", 0, 0)
@@ -226,6 +227,12 @@ check(fmgr.set_mode_calls == [("BB:BB", "ps5-xbox")],
 labels = [str(p["label"]) for _, p in menu._items if "label" in p]
 check("DualSense 1" in labels and "DualSense 2" in labels,
       "menu shows the numbered headers")
+# A single-choice family shows its one mode as a static, disabled line rather
+# than a lone always-checked radio — one per Xbox pad.
+disabled = [str(p["label"]) for _, p in menu._items
+            if "label" in p and not p.get("enabled", True)]
+check(disabled.count(cm.MODE_LABELS["xbox-native"]) == 2,
+      "each single-mode Xbox pad shows its mode as a non-interactive line")
 
 # ── Scenario G: scan filter — phys marker excludes ours, real X360 adopted ──
 print("Scenario G: virtual pads excluded by uinput phys; real X360 pad adopted")

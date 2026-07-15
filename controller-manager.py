@@ -32,10 +32,19 @@ VENDOR_FAMILY = {
 
 # Optional nicer display names per (vendor, product); falls back to the kernel
 # device name when unknown.
+#
+# 0x028E is deliberately absent: xpadneo rewrites the product id of the
+# Bluetooth Xbox pads it binds to 0x028E ("pretending XB1S Windows wireless
+# mode"), so both an Xbox One S (0x02E0) and a newer pad (0x02FD) present as
+# 0x028E once connected — and 0x028E is also the real wired Xbox 360 id. Keying
+# a name on it would mislabel every Bluetooth Xbox pad as "Xbox 360", so we let
+# it fall back to the kernel name ("Xbox Wireless Controller"), which is
+# accurate. Two such pads then share a base name and are disambiguated by
+# player number (see _inst_label). Entries below are for USB-connected pads,
+# whose ids xpadneo does not rewrite.
 CONTROLLER_NAMES = {
     (0x054c, 0x0ce6): "DualSense",
     (0x054c, 0x0df2): "DualSense Edge",
-    (0x045e, 0x028e): "Xbox 360",
     (0x045e, 0x02ea): "Xbox One",
     (0x045e, 0x02fd): "Xbox One S",
     (0x045e, 0x02e0): "Xbox One S (BT)",
@@ -1061,9 +1070,19 @@ class DbusmenuServer(dbus.service.Object):
             for inst in instances:
                 sem.append(("header", inst.ident,
                             self._inst_label(inst, instances)))
-                for mode in MODES_FOR_FAMILY.get(inst.family, []):
-                    sem.append(("radio", inst.ident, mode,
-                                MODE_LABELS[mode], inst.mode == mode))
+                modes = MODES_FOR_FAMILY.get(inst.family, [])
+                if len(modes) == 1:
+                    # A single-choice family (e.g. Xbox: only native) has
+                    # nothing to switch between. Show the mode as a static,
+                    # non-interactive line rather than a lone radio that is
+                    # always checked and does nothing when clicked. If a second
+                    # mode is ever enabled for the family this reverts to radios
+                    # automatically.
+                    sem.append(("info", MODE_LABELS[modes[0]]))
+                else:
+                    for mode in modes:
+                        sem.append(("radio", inst.ident, mode,
+                                    MODE_LABELS[mode], inst.mode == mode))
                 if inst is not instances[-1]:
                     sem.append(("sep",))
         sem.append(("sep",))   # final separator before Quit
