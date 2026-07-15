@@ -60,6 +60,36 @@ The exact open permissions of a native node come from the distribution's control
 rules (usually `0660`/`0666` plus a seat `uaccess` ACL, shown as a trailing `+`); what
 matters is gated = `000` with no ACL vs. native = readable with the seat ACL.
 
+## A fifth (phantom) controller appears when two DualSense are both emulated
+
+Symptom: with two DualSense both in `ps5-xbox`, Steam's *Settings → Controller* lists
+**five** controllers — the two native Xbox pads, the two emulated virtual Xbox pads, and
+one extra **PlayStation** pad. It appears only once the *second* pad is emulated (one
+emulated = four, clean) and is always the second, whichever physical pad that is.
+
+This is a **known, inert limitation**, not a gate failure. The hidraw gate holds on both
+pads; the phantom is the second pad's **evdev** node, which Steam re-opens and lists during
+the driver rebind of the second `ps5-xbox` transition. The remapper's `EVIOCGRAB` still
+holds it, so the phantom produces **no input** (no double input) — it is a dead list entry.
+Full analysis and why there is no lightweight fix:
+[the evdev enumeration leak](decisions/evdev-enumeration-leak.md).
+
+Confirm it is the harmless case — both hidraw nodes gated, the phantom grabbed and inert:
+
+```bash
+# both physical DualSense hidraw nodes must be 000 (gate holds on both):
+for d in /sys/bus/hid/devices/*:054C:*; do
+  sed -n 's/^HID_UNIQ=/uniq /p' "$d/uevent"
+  for h in "$d"/hidraw/hidraw*; do ls -l "/dev/$(basename "$h")"; done
+done
+
+# the phantom's evdev node is grabbed → no events leak to Steam:
+evtest /dev/input/eventN   # prints "This device is grabbed by another process"
+```
+
+If instead the phantom *reacts* to input in a game (double input) or steals a player slot,
+that is the functional case the decision doc gates its fix on — worth reporting.
+
 ## The DualSense lightbar shows the wrong colour after a reconnect
 
 Symptom: the pad is correctly remapped (e.g. output as Xbox, raw HID gated) but the lightbar
