@@ -76,6 +76,12 @@ for the full design.
   | `python3-dbus` (`dbus-python`) | serve the tray item and menu over D-Bus |
   | `python3-gi` (PyGObject) | GLib main loop |
 
+- *Optional, for the Bluetooth Xbox pad reporting product `0x02FD`:* `udev-hid-bpf`,
+  `clang`, `bpftool`, `libbpf-devel`, and a kernel with `CONFIG_HID_BPF` + BTF. `install.sh`
+  builds a HID-BPF descriptor fixup for that pad; without these it skips the fixup with a
+  warning and everything else installs normally (see
+  [the Xbox 0x02FD decision](docs/decisions/xbox-02fd-hid-bpf.md)).
+
 ## Installation
 
 ```bash
@@ -145,6 +151,7 @@ pads, over USB and Bluetooth.
   - [Steam coexistence & lightbar ownership](docs/decisions/steam-coexistence.md)
   - [Daemon-owned player numbers](docs/decisions/player-leds.md)
   - [dbusmenu item model](docs/decisions/tray-menu-model.md)
+  - [Xbox 0x02FD HID-BPF descriptor fixup](docs/decisions/xbox-02fd-hid-bpf.md)
 - [Troubleshooting / known issues](docs/troubleshooting.md)
 - Runbooks:
   - [Installation](runbooks/install.md)
