@@ -28,12 +28,26 @@ The tray label shows the same number ("DualSense 1" = the pad with one lit LED),
 menu and hardware cannot disagree — a positional label would flip after a
 drop-and-readopt while the LEDs kept their number.
 
+When a pad stays off long enough to be dropped, its number leaves a hole in the
+connected set (e.g. 1, 3, 4). The daemon compacts that hole — renumbering the
+remaining pads to a contiguous 1..N, **order-preserving** so no two continuously
+connected pads swap and nobody overtakes anybody — but only after `COMPACT_GRACE`
+(5 min), far longer than the removal grace. That window is deliberately sized for a
+dead battery/accu swap: a pad that returns within it reclaims its old number (still
+free) and no renumber happens; only a pad that stays off past it gives up its slot.
+A tray entry, "Renumber players" (shown only while a hole exists), forces the
+compaction immediately. The absent pad's stale reservation is left in `_players`
+untouched — a much-later return finds its old number now worn by a lower-numbered
+peer and takes the next free one, so a reclaim never reopens a closed hole.
+
 ## Consequences
 
-- Numbers are stable across mode switches, reconnects and daemon restarts; the
-  first-connected pad stays player 1 for good.
-- A number is freed only by a full removal (grace elapsed) and reused by the next new
-  pad — a fixed set of pads keeps fixed numbers forever.
+- Numbers are stable across mode switches, reconnects and daemon restarts; a pad
+  keeps its number as long as the connected set is unchanged.
+- A number is freed by a full removal (grace elapsed); the resulting hole is then
+  compacted after `COMPACT_GRACE`, or at once via the tray entry, so the connected
+  pads stay a contiguous 1..N. A brief power-off (battery swap) inside the window
+  reclaims the number and triggers no renumber.
 - Steam's own count may still flash for a few seconds after churn until the re-assert
   wins; accepted, same policy as the lightbar reopen handling.
 - Xbox pads get a number too (for stable labels), but their LED ring is left to the

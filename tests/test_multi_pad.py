@@ -55,6 +55,7 @@ class FakeInst:
     def remap_healthy(self): return True
     def refresh_led(self): pass
     def watch_holders(self, steam_game=False): pass
+    def _apply_player_leds(self): pass
 
 cm.ControllerInstance = FakeInst
 
@@ -279,6 +280,95 @@ check("event52" not in found, "inputtino stream-client pad excluded")
 check("event53" not in found, "non-gamepad Sony node excluded")
 check("event54" in found and found["event54"]["name"] == "DualSense",
       "real DualSense adopted with its display name")
+
+# ── Scenario H: auto-compaction closes a numbering gap after COMPACT_GRACE ───
+print("Scenario H: a pad left off past grace, then the gap is compacted on time")
+saved_configs.clear(); config_store[0] = {}
+clock[0] = 5000.0
+two = [ds("event60", "AA:AA"), ds("event61", "BB:BB")]
+mgr = make_mgr([list(two), [two[1]], [two[1]], [two[1]], [two[1]]])
+mgr._poll()                                    # adopt AA=1, BB=2
+insts = by_ident(mgr)
+check(insts["AA:AA"].player == 1 and insts["BB:BB"].player == 2,
+      "two pads adopted as players 1 and 2")
+mgr._poll()                                    # AA absent, within grace
+check(mgr._compact_due is None, "no gap while the dropped pad is still in grace")
+clock[0] += cm.REMOVE_GRACE + 0.1
+mgr._poll()                                    # AA dropped -> gap {2}, arm timer
+check(len(mgr._instances) == 1, "AA dropped past grace")
+check(by_ident(mgr)["BB:BB"].player == 2, "BB keeps its number while the timer runs")
+check(mgr._compact_due is not None, "a standing gap arms the compaction timer")
+clock[0] += 1.0
+mgr._poll()                                    # still before due
+check(by_ident(mgr)["BB:BB"].player == 2, "no compaction before COMPACT_GRACE")
+clock[0] += cm.COMPACT_GRACE
+mgr._poll()                                    # due -> compact
+check(by_ident(mgr)["BB:BB"].player == 1, "gap compacted: BB renumbered to 1")
+check(mgr._compact_due is None, "timer disarmed once the numbering is contiguous")
+check(saved_configs and saved_configs[-1].get("_players", {}).get("BB:BB") == 1,
+      "compacted number persisted under _players")
+
+# ── Scenario I: a returning pad within grace reclaims its number, no renumber ─
+print("Scenario I: battery swap inside the window reclaims the number, no compaction")
+config_store[0] = {}
+clock[0] = 5500.0
+two = [ds("event62", "CC:CC"), ds("event63", "DD:DD")]
+back = ds("event64", "CC:CC")                   # CC returns on a new node
+mgr = make_mgr([list(two), [two[1]], [back, two[1]], [back, two[1]]])
+mgr._poll()                                     # CC=1, DD=2
+mgr._poll()                                     # CC absent, within grace
+clock[0] += 1.0
+mgr._poll()                                     # CC back before grace elapses
+check(mgr._compact_due is None, "reclaim leaves the numbering contiguous, no timer")
+insts = by_ident(mgr)
+check(insts["CC:CC"].player == 1 and insts["DD:DD"].player == 2,
+      "returning pad kept its number; nobody was renumbered")
+
+# ── Scenario J: manual renumber compacts immediately, order-preserving ───────
+print("Scenario J: 'Renumber players' compacts now, preserving order")
+saved_configs.clear(); config_store[0] = {}
+clock[0] = 6000.0
+three = [ds("e70", "AA:AA"), ds("e71", "BB:BB"), ds("e72", "CC:CC")]
+mgr = make_mgr([list(three), [three[0], three[2]], [three[0], three[2]]])
+mgr._poll()                                     # AA=1, BB=2, CC=3
+mgr._poll()                                     # BB absent, within grace
+clock[0] += cm.REMOVE_GRACE + 0.1
+mgr._poll()                                     # BB dropped -> gap {1,3}
+check(by_ident(mgr)["CC:CC"].player == 3, "CC still 3 before the manual renumber")
+mgr.renumber()
+insts = by_ident(mgr)
+check(insts["AA:AA"].player == 1 and insts["CC:CC"].player == 2,
+      "manual renumber compacts to 1,2 preserving order (AA before CC)")
+check(mgr._compact_due is None, "manual renumber clears any pending timer")
+
+# ── Scenario K: the gap surfaces a 'Renumber players' entry that routes ──────
+print("Scenario K: a numbering gap surfaces a Renumber players entry")
+class GapMgr:
+    def __init__(self, instances):
+        self.instances = instances; self.renumber_calls = 0
+    def get_instances(self): return list(self.instances)
+    def set_mode(self, ident, mode): pass
+    def renumber(self): self.renumber_calls += 1
+def build_menu(mgr):
+    m = object.__new__(cm.DbusmenuServer)
+    m._mgr = mgr; m._on_quit = lambda: None; m._revision = 1
+    m._items = []; m._lookup = {}; m._actions = {}; m._sig = None; m._next_id = 1
+    m.LayoutUpdated = lambda rev, parent: None
+    m.ItemsPropertiesUpdated = lambda updated, removed: None
+    m.notify_update()
+    return m
+gap_menu = build_menu(GapMgr([Pad("AA:AA", "DualSense", player=1),
+                              Pad("BB:BB", "DualSense", player=3)]))  # missing 2
+action_ids = [i for i, p in gap_menu._items
+              if str(p.get("label", "")) == "Renumber players"]
+check(len(action_ids) == 1, "gap surfaces exactly one Renumber players entry")
+gap_menu.Event(action_ids[0], "clicked", 0, 0)
+check(gap_menu._mgr.renumber_calls == 1, "clicking Renumber players calls mgr.renumber")
+contig_menu = build_menu(GapMgr([Pad("AA:AA", "DualSense", player=1),
+                                 Pad("BB:BB", "DualSense", player=2)]))
+check(not any(str(p.get("label", "")) == "Renumber players"
+              for _, p in contig_menu._items),
+      "contiguous numbering shows no Renumber players entry")
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}")

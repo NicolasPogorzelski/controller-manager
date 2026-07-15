@@ -43,6 +43,20 @@ its nodes; use the fresh numbers below.
 Power-cycle DualSense 2 (or walk it out of BT range for >10 s), reconnect it, wait two
 poll ticks (~5 s).
 
+### 5. Renumber after a pad stays off
+
+Power **off** DualSense 1 (player 1) and leave it off. Within a few seconds its tray
+entry disappears; the remaining pads still read 2, 3, 4 — a hole at 1 — and a
+**"Renumber players"** entry appears near the bottom of the menu. Close the hole either
+way:
+
+- click **Renumber players** to compact immediately, or
+- wait `COMPACT_GRACE` (5 min) for the automatic compaction.
+
+Then power DualSense 1 back on and confirm it rejoins at the end, not by displacing a
+peer. For the battery-swap case, instead power a pad off and back on **within** the
+window (and before clicking Renumber).
+
 ## Verification
 
 **Menu is complete and numbered** (after step 2):
@@ -81,6 +95,17 @@ python3 -c "import evdev; print(*[evdev.InputDevice(p).name for p in evdev.list_
 - All menu items still clickable: switch DualSense 1 → Emulate Xbox and back — both
   clicks take effect (guards the id-recycling regression, `tests/test_menu_ids.py`).
 
+**Compaction closes the hole, order-preserving** (after step 5):
+
+- Once compacted the connected pads are numbered 1..N with no gap, relative order
+  preserved (former player 3 → 2, former 4 → 3 — nobody leapfrogs). White player LEDs
+  and menu labels both follow.
+- The "Renumber players" entry is gone once the numbering is contiguous.
+- DualSense 1 powered back on **after** the window takes the next free number — it does
+  NOT evict a currently-connected pad.
+- Battery-swap safety: a pad powered off and back on **within** the window (before any
+  Renumber) reclaims its old number, and nothing else renumbers.
+
 **Input reaches applications per pad** — with a gamepad tester (or `evtest`), press
 buttons on each pad in turn: each event stream stays on its own device, DualSense 2's
 events arrive under the virtual X-Box identity with X/Y correct (top button = Y).
@@ -96,6 +121,8 @@ events arrive under the virtual X-Box identity with X/Y correct (top button = Y)
 | Player LEDs rotate with mode switches | daemon re-assert missing (old build) — Steam rewrites its slot count on every rebind; update to the `_players` build |
 | One pad's lightbar never lights in ANY mode, but its player LEDs follow the daemon | lightbar defect on that unit — player LEDs share report and transport, so the write path is proven; cross-check the pad's own firmware-driven animations (pairing pulse, charging pulse) with no host involved |
 | Menu items dead after churn | the id-recycling bug class ([tray-menu-model](../docs/decisions/tray-menu-model.md)) — capture `dbus-monitor` output and reopen |
+| Hole never closes after a pad stays off >5 min | auto-compaction disabled/old build — check the `COMPACT_GRACE` path in `_poll`; "Renumber players" forces it |
+| A pad returning after a long absence steals a connected pad's number | compaction/reclaim regression — it should take the next free number; capture `_players` from the config and file an issue |
 | Second identical pad collapses into the first (USB) | both report empty `uniq` AND identical `phys` — should not happen on distinct ports; file an issue with the step-1 output |
 
 ## Rollback
