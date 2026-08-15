@@ -115,6 +115,30 @@ while read -r testfile; do
 done < <(find "${REPO_ROOT}/tests" -name "test_*.py" -type f 2>/dev/null | sort)
 
 # =============================================================================
+# Check 8: plain-ASCII punctuation
+# =============================================================================
+# Documentation, docstrings and comments here are read in terminals, greps and
+# diffs, where typographic punctuation renders inconsistently across fonts and is
+# awkward to search for, since several look-alike codepoints exist. The code is
+# ASCII anyway, so the prose follows the same rule rather than keeping a second
+# convention.
+#
+# Exception: box-drawing characters (U+2500-U+257F), which are the conventional
+# tool for the architecture diagrams.
+echo "Check 8: plain-ASCII punctuation"
+
+while read -r file; do
+    rel="${file#"${REPO_ROOT}"/}"
+    git -C "${REPO_ROOT}" check-ignore -q "${rel}" 2>/dev/null && continue
+    { grep -noP '(?![\x{2500}-\x{257F}])[^\x00-\x7F]' "${file}" || true; } | while read -r match; do
+        echo "  Non-ASCII punctuation: ${rel}:${match}"
+        echo "x" >> "${ERROR_LOG}"
+    done
+done < <(find "${REPO_ROOT}" -not -path "*/.git/*" -type f \
+              \( -name "*.md" -o -name "*.py" -o -name "*.sh" -o -name "*.yml" \
+                 -o -name "*.rules" -o -name "*.sudoers" -o -name "*.c" \))
+
+# =============================================================================
 # Result
 # =============================================================================
 ERRORS=$((ERRORS + $(wc -l < "${ERROR_LOG}")))
