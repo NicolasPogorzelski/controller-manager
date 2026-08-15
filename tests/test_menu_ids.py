@@ -1,7 +1,7 @@
 """Regression test for the dbusmenu model: item ids must NEVER be recycled
-across a structural change — the GNOME appindicator host caches item
+across a structural change - the GNOME appindicator host caches item
 properties per id and does not refresh them when a layout change reuses an id
-for a structurally different item (separator→radio after a controller
+for a structurally different item (separator->radio after a controller
 connects), leaving menu entries stuck disabled. Display-only changes (radio
 checkmark, labels) must instead KEEP their ids and go out as
 ItemsPropertiesUpdated deltas.
@@ -20,7 +20,7 @@ try:
     cm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
-    print(f"SKIP: runtime dependency missing ({ex.name}) — needs evdev/dbus/gi")
+    print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
     sys.exit(0)
 
 fails = []

@@ -16,7 +16,7 @@ try:
     cm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
-    print(f"SKIP: runtime dependency missing ({ex.name}) — needs evdev/dbus/gi")
+    print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
     sys.exit(0)
 
 # Never touch the user's real controller-modes.json: adoption persists the
@@ -50,7 +50,7 @@ class FakeInst:
     def virtual_path(self): return None
     def remap_healthy(self): return True  # liveness re-assert tested in Scenario H
     def refresh_led(self): pass   # led self-heal is exercised separately (Scenario E)
-    def watch_holders(self, steam_game=False): pass  # resting-colour policy needs /proc + sudo — not here
+    def watch_holders(self, steam_game=False): pass  # resting-colour policy needs /proc + sudo - not here
 
 cm.ControllerInstance = FakeInst
 
@@ -71,7 +71,7 @@ def check(cond, msg):
     if not cond:
         fails.append(msg)
 
-# ── Scenario A: connect → steady → RECONNECT on a new node ──────────────────
+# ── Scenario A: connect -> steady -> RECONNECT on a new node ──────────────────
 print("Scenario A: reconnect must rebind in place (no menu change)")
 mgr = make_mgr([[dev("event25")], [dev("event25")], [dev("event30")]])
 c1 = mgr._poll()
@@ -97,7 +97,7 @@ clock[0] += 1.0
 check(mgr._poll() is False,     "return within grace -> changed=False")
 check(inst.rebinds == 1,        "return -> rebind() once")
 
-# ── Scenario C: real disconnect longer than grace → removed ────────────────
+# ── Scenario C: real disconnect longer than grace -> removed ────────────────
 print("Scenario C: absence beyond grace removes the instance")
 mgr = make_mgr([[dev("event25")], [], []])
 mgr._poll()
@@ -120,7 +120,7 @@ check(len(mgr._instances) == 2, "both controllers tracked")
 # ── Scenario G: reconnect on the *reused* evdev path (same eventX number) ────
 # The pad vanishes and returns on the *same* /dev/input/eventX. rebind() must
 # still fire so the mode is re-asserted (remapper restarted, hidraw re-gated,
-# lightbar repainted) — without it the pad comes back un-remapped and wrongly
+# lightbar repainted) - without it the pad comes back un-remapped and wrongly
 # coloured until a manual switch. It is not a structural change (no menu churn).
 print("Scenario G: reconnect on a reused evdev path must re-assert the mode")
 mgr = make_mgr([[dev("event25")], [], [dev("event25")]])
@@ -133,7 +133,7 @@ clock[0] += 1.0
 check(mgr._poll() is False,  "return on same path -> changed=False (no menu churn)")
 check(inst.rebinds == 1,     "reconnect on reused path -> rebind() (mode re-asserted)")
 
-# ── Scenario E: lightbar node lags evdev on reconnect → self-heal ───────────
+# ── Scenario E: lightbar node lags evdev on reconnect -> self-heal ───────────
 print("Scenario E: :rgb:indicator node absent at bind time -> applied once it appears")
 led_calls = []
 cm.hidraw_gate = lambda *a, **k: None          # no sudo/hidraw in the test
@@ -182,7 +182,7 @@ check(led_calls == [(0, 128, 0)],
 inst.refresh_led()                             # node stable now
 check(len(led_calls) == 1,                 "stable node -> no repaint spam")
 
-# ── Scenario H: dead remapper thread on a steady pad → mode re-asserted ─────
+# ── Scenario H: dead remapper thread on a steady pad -> mode re-asserted ─────
 # A BT blip shorter than one poll interval kills the remapper's grab without
 # the pad ever appearing absent. The reconcile must notice the dead thread
 # (remap_healthy() False) and re-assert the mode, without any menu churn.

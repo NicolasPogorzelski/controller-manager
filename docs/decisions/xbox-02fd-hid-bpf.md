@@ -3,7 +3,7 @@
 ## Context
 
 A Bluetooth Xbox Wireless Controller reporting USB product id `0x02FD` connects and pairs
-normally — BlueZ shows it `Connected`, with the HID service — but it produces **no input
+normally - BlueZ shows it `Connected`, with the HID service - but it produces **no input
 device at all**: no `/dev/input/event*`, no `js*`, no `hidraw*`. It is therefore invisible
 to everything downstream: the tray never lists it, and no application (RetroArch, any SDL
 title) can see it. Two structurally identical DualSense pads on the same host work fine, as
@@ -20,23 +20,23 @@ The pad's firmware advertises a **306-byte HID report descriptor that is truncat
 mid-item** inside the force-feedback output collection. It opens five `COLLECTION`s but
 closes only three; the last bytes are a dangling `USAGE` / `LOGICAL_MINIMUM` with no Main
 item and no closing `END_COLLECTION`. `hid_open_report()` rejects such a descriptor
-outright, so **no driver can bind** — not `hid-generic`, not `xpadneo`. No bind means no
+outright, so **no driver can bind** - not `hid-generic`, not `xpadneo`. No bind means no
 input node.
 
 The working `0x02E0` sibling ships a well-formed 306-byte descriptor that ends in
-`… 81 02 c0` (INPUT, END_COLLECTION) and binds cleanly. The only structural difference is
+`... 81 02 c0` (INPUT, END_COLLECTION) and binds cleanly. The only structural difference is
 the two missing `END_COLLECTION` bytes. This is a per-firmware bug in the `0x02FD` unit;
 Microsoft fixed it in later firmware.
 
 ## Options considered
 
-1. **Update the controller firmware** — the real fix, but it is only reachable via the Xbox
+1. **Update the controller firmware** - the real fix, but it is only reachable via the Xbox
    Accessories app (Windows) or an Xbox console. Neither was available, and requiring either
    defeats the point of a Linux-side tool.
-2. **Patch xpadneo** — its `report_fixup` already massages these pads, but it does not add
+2. **Patch xpadneo** - its `report_fixup` already massages these pads, but it does not add
    the missing bytes, and it ships here as a packaged akmod. A downstream patch would have to
    be re-applied against every package update.
-3. **HID-BPF report-descriptor fixup** *(chosen)* — attach a small BPF program at device
+3. **HID-BPF report-descriptor fixup** *(chosen)* - attach a small BPF program at device
    probe that appends the two missing `END_COLLECTION` bytes, yielding exactly the balanced
    descriptor the working pad already has. The kernel supports it (`CONFIG_HID_BPF`, BTF
    present), Fedora packages the loader (`udev-hid-bpf`), and it needs no changes to the
@@ -57,7 +57,7 @@ adopts as the `xbox` family with no daemon changes.
 Two implementation facts, learned the hard way and encoded in the source:
 
 - **The device is matched as `0x028E`, not `0x02FD`.** xpadneo rewrites the product id
-  `0x02FD → 0x028E` inside its probe (“pretending XB1S Windows wireless mode”), and that
+  `0x02FD -> 0x028E` inside its probe ("pretending XB1S Windows wireless mode"), and that
   probe runs *before* the BPF program is attached, whether or not it ultimately fails. So by
   the time the udev rule fires the device already reports `0x028E`. The program's
   `HID_BPF_CONFIG` lists both ids (`0x028E` for the normal xpadneo case, `0x02FD` as a
@@ -75,7 +75,7 @@ Two implementation facts, learned the hard way and encoded in the source:
 With this pad, the driver that ultimately binds after the late BPF reprobe is `hid-generic`
 (xpadneo's auto-load aliases key on `0x02FD`/`0x0B22`, not the rewritten `0x028E`, and it
 does not re-grab on the reprobe). `hid-generic` exposes a complete, correctly-laid-out
-gamepad — A/B/X/Y, both triggers, both sticks, hat D-pad — which is fully usable; xpadneo is
+gamepad - A/B/X/Y, both triggers, both sticks, hat D-pad - which is fully usable; xpadneo is
 not required for this pad to work.
 
 ## Consequences
@@ -83,7 +83,7 @@ not required for this pad to work.
 - **New build dependency, gated to opt-in.** Building the object needs `clang`, `bpftool`,
   `libbpf-devel`, `udev-hid-bpf`, and a BTF-enabled kernel. Because the fixup only matters to
   owners of the `0x02FD` pad, `install.sh` treats a missing prerequisite as a
-  skip-with-warning — a DualSense-only install is never blocked by it.
+  skip-with-warning - a DualSense-only install is never blocked by it.
 - **Built against the running kernel.** `hid-bpf/build.sh` regenerates `vmlinux.h` from
   `/sys/kernel/btf/vmlinux` at install time rather than committing a large header or a
   prebuilt binary; `build/` is git-ignored.

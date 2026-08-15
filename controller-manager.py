@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Controller Manager — unified tray + per-controller remapping.
+Controller Manager - unified tray + per-controller remapping.
 
 Supports:
   PlayStation DualSense  ->  native  |  output as Xbox 360
@@ -22,10 +22,10 @@ dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 
 CONFIG_FILE = os.path.expanduser("~/.config/controller-modes.json")
 
-# (vendor, product) → (display name, controller family)
+# (vendor, product) -> (display name, controller family)
 # Recognise controllers by USB/BT vendor + gamepad capability rather than a
-# fixed product-ID list (which keeps missing models — e.g. the BT Xbox pad
-# 045e:02e0). Vendor → controller family.
+# fixed product-ID list (which keeps missing models - e.g. the BT Xbox pad
+# 045e:02e0). Vendor -> controller family.
 VENDOR_FAMILY = {
     0x054c: "ps5",    # Sony
     0x045e: "xbox",   # Microsoft
@@ -37,7 +37,7 @@ VENDOR_FAMILY = {
 # 0x028E is deliberately absent: xpadneo rewrites the product id of the
 # Bluetooth Xbox pads it binds to 0x028E ("pretending XB1S Windows wireless
 # mode"), so both an Xbox One S (0x02E0) and a newer pad (0x02FD) present as
-# 0x028E once connected — and 0x028E is also the real wired Xbox 360 id. Keying
+# 0x028E once connected - and 0x028E is also the real wired Xbox 360 id. Keying
 # a name on it would mislabel every Bluetooth Xbox pad as "Xbox 360", so we let
 # it fall back to the kernel name ("Xbox Wireless Controller"), which is
 # accurate. Two such pads then share a base name and are disambiguated by
@@ -62,8 +62,8 @@ DEFAULT_MODES = {
 # Lightbar colors per ps5 mode (R, G, B 0-255).
 # Only DualSense-family controllers have a lightbar; Xbox is always skipped.
 MODE_LED = {
-    "ps5-native": (0,   0, 255),   # blue  — native PlayStation feel
-    "ps5-xbox":   (0, 128,   0),   # green — signals active Xbox emulation
+    "ps5-native": (0,   0, 255),   # blue  - native PlayStation feel
+    "ps5-xbox":   (0, 128,   0),   # green - signals active Xbox emulation
 }
 
 MODE_LABELS = {
@@ -76,7 +76,7 @@ MODE_LABELS = {
 # Modes offered in the tray menu per family. "xbox-ps5" is intentionally NOT
 # listed: the evdev translation is correct, but applications read PlayStation
 # VID:PIDs via a HID API (hidraw) and a virtual uinput pad has no hidraw node,
-# so only axes (not buttons) reach applications — unusable in practice. See
+# so only axes (not buttons) reach applications - unusable in practice. See
 # docs/decisions/output-protocol-constraints.md. The translation infrastructure
 # (VIRTUAL_PS5 / QUIRK_BUTTON_MAP / _target_for_mode) is kept so a future
 # uhid-based fix can re-enable it.
@@ -101,10 +101,10 @@ VIRTUAL_NAMES = {VIRTUAL_XBOX["name"], VIRTUAL_PS5["name"]}
 # Some controllers expose a non-standard evdev button layout via their kernel
 # driver; a raw passthrough then mismatches what SDL expects for the *target*
 # identity (buttons land wrong / dead). Per source (vendor, product): source
-# evdev code → standard gamepad code. Codes not listed pass through unchanged.
+# evdev code -> standard gamepad code. Codes not listed pass through unchanged.
 # Empirically mapped by position (see docs/decisions/remapping-engine.md).
 QUIRK_BUTTON_MAP = {
-    (0x045e, 0x02e0): {            # Xbox One S — old Bluetooth firmware
+    (0x045e, 0x02e0): {            # Xbox One S - old Bluetooth firmware
         e.BTN_C:    e.BTN_WEST,    # X
         e.BTN_WEST: e.BTN_TL,      # LB
         e.BTN_Z:    e.BTN_TR,      # RB
@@ -113,27 +113,27 @@ QUIRK_BUTTON_MAP = {
         e.KEY_MENU: e.BTN_MODE,    # Xbox / Guide
         e.BTN_TL2:  e.BTN_THUMBL,  # L3
         e.BTN_TR2:  e.BTN_THUMBR,  # R3
-        # A→BTN_A(=SOUTH), B→BTN_B(=EAST), Y→BTN_NORTH already standard.
+        # A->BTN_A(=SOUTH), B->BTN_B(=EAST), Y->BTN_NORTH already standard.
     },
 }
 
 # The 0x133/0x134 codes are positionally inverted between driver families:
-# hid-playstation emits Triangle (top) → BTN_NORTH (0x133) and Square (left)
-# → BTN_WEST (0x134), while xpad assigns the SAME codes the other way round —
-# X (left) → BTN_X (== BTN_NORTH) and Y (top) → BTN_Y (== BTN_WEST).
+# hid-playstation emits Triangle (top) -> BTN_NORTH (0x133) and Square (left)
+# -> BTN_WEST (0x134), while xpad assigns the SAME codes the other way round -
+# X (left) -> BTN_X (== BTN_NORTH) and Y (top) -> BTN_Y (== BTN_WEST).
 # Consumers resolve codes against the advertised identity, so a 1:1
 # passthrough onto an "X-Box 360 pad" swaps X/Y in games. All other codes
 # (A/B, Select/Start/Guide, sticks and triggers via ABS) happen to agree.
-# Per target name: standard source code → code expected under that identity.
+# Per target name: standard source code -> code expected under that identity.
 TARGET_BUTTON_MAP = {
     VIRTUAL_XBOX["name"]: {
-        e.BTN_NORTH: e.BTN_WEST,   # Triangle → 0x134, read as Y (top)
-        e.BTN_WEST:  e.BTN_NORTH,  # Square   → 0x133, read as X (left)
+        e.BTN_NORTH: e.BTN_WEST,   # Triangle -> 0x134, read as Y (top)
+        e.BTN_WEST:  e.BTN_NORTH,  # Square   -> 0x133, read as X (left)
     },
 }
 
 def compose_button_maps(quirk, target):
-    """Chain quirk (source code → standard code) and target (standard code →
+    """Chain quirk (source code -> standard code) and target (standard code ->
     code under the target identity) into the single dict the Remapper applies
     per event; None when both are empty."""
     quirk, target = quirk or {}, target or {}
@@ -160,7 +160,7 @@ def load_config():
 
 def save_config(cfg):
     # Atomic write: a crash / OOM-kill / full disk mid-write must not leave a
-    # truncated file — load_config swallows a parse error and returns {}, which
+    # truncated file - load_config swallows a parse error and returns {}, which
     # would silently drop every persisted mode and player number. Write a temp
     # file in the same directory (same filesystem, so os.replace is atomic),
     # fsync it, then rename over the target.
@@ -178,8 +178,8 @@ def save_config(cfg):
 #
 # An evdev grab (EVIOCGRAB) only blocks the evdev node. Some applications
 # read game controllers straight from /dev/hidraw*, so a remapped DualSense
-# would still reach the application as a PlayStation pad — in parallel with our
-# virtual Xbox pad — causing double input. We therefore chmod the physical
+# would still reach the application as a PlayStation pad - in parallel with our
+# virtual Xbox pad - causing double input. We therefore chmod the physical
 # controller's hidraw node to 000 for the duration of any remap. This is
 # system-wide and launcher-agnostic: it hides the pad from every application
 # alike. The chmod needs root, delegated to a tightly-scoped helper via a
@@ -187,7 +187,7 @@ def save_config(cfg):
 #
 # The gate operates on a SPECIFIC hidraw node (not a VID:PID), so two identical
 # controllers (same VID:PID, different physical device) can be gated indepen-
-# dently — only the remapped one is hidden.
+# dently - only the remapped one is hidden.
 
 GATE_BIN = "/usr/local/bin/controller-hidraw-gate"
 LED_BIN  = "/usr/local/bin/controller-led"
@@ -195,7 +195,7 @@ LED_BIN  = "/usr/local/bin/controller-led"
 def hidraw_for_event(ev_path):
     """Return all /dev/hidrawN nodes for the HID device behind an evdev node.
     Returns an empty list when the device exposes no hidraw (e.g. xpad) or when
-    the pad's node has gone (ev_path None — _refresh_nodes drops the path when a
+    the pad's node has gone (ev_path None - _refresh_nodes drops the path when a
     pad does not re-enumerate in time, and a resting-colour apply can race that).
     Guarded like led_indicator_for_event, whose callers already tolerate None."""
     if not ev_path:
@@ -209,7 +209,7 @@ def hidraw_for_event(ev_path):
 
 def hidraw_gate(action, uniq, nodes):
     """action: 'block' | 'restore' | 'rearm', keyed by the pad's stable HID
-    identity (uniq: BT MAC / serial). The v2 helper actually revokes access —
+    identity (uniq: BT MAC / serial). The v2 helper actually revokes access -
     a plain chmod cannot: a process that opened the node before the gate
     (Steam Input grabs every pad on connect) keeps a working fd. The helper
     rebinds the kernel driver on a state transition, which kills every open
@@ -245,7 +245,7 @@ def led_indicator_for_event(ev_path):
     """Return the DualSense RGB-indicator LED name (e.g. 'input38:rgb:indicator')
     for the HID device behind an evdev node, or None. The hid-playstation driver
     exposes the lightbar as a multicolor LED; driving it there lets the kernel
-    do the USB/BT output-report framing, so the colour survives BT reconnects —
+    do the USB/BT output-report framing, so the colour survives BT reconnects -
     unlike raw hidraw writes, which race the driver and get dropped over BT."""
     if not ev_path:      # instance mid-rebind: node not re-resolved yet
         return None
@@ -259,8 +259,8 @@ def led_indicator_for_event(ev_path):
 def led_set_raw(hidraw_nodes, rgb):
     """Set the DualSense lightbar via a raw HID output report (root helper).
     Unlike a kernel LED-class write, a raw colour report also clears the pad's
-    firmware 'light out' latch — the state Steam Input leaves behind while it
-    holds the pad — so the colour actually reaches the hardware instead of only
+    firmware 'light out' latch - the state Steam Input leaves behind while it
+    holds the pad - so the colour actually reaches the hardware instead of only
     updating the sysfs LED node (which stays a physical no-op once latched).
     Tries the pad's hidraw node(s) until the helper accepts one (a DualSense
     exposes a single hidraw). No-op without a node or the helper/sudo rule."""
@@ -282,7 +282,7 @@ def led_set_raw(hidraw_nodes, rgb):
 
 
 def led_set_player(prefix, player):
-    """Light the pad's white player LEDs (hid-playstation …:white:player-N)
+    """Light the pad's white player LEDs (hid-playstation ...:white:player-N)
     to the daemon's stable player number via the root helper. The pattern is
     PS5-authentic: the lit-LED count equals the player number. No-op without
     a helper, a prefix or a representable number (patterns cover 1-4)."""
@@ -302,7 +302,7 @@ def is_steam_client(pid):
     """True when the pid belongs to the Steam client itself (the main
     client binary, comm 'steam', is the process that opens every pad's
     hidraw for identification and Steam Input; the webhelper never does
-    but is included for completeness). Games — Steam-launched or not —
+    but is included for completeness). Games - Steam-launched or not -
     run under their own comms and count as foreign."""
     try:
         with open(f"/proc/{pid}/comm") as f:
@@ -312,13 +312,13 @@ def is_steam_client(pid):
 
 
 def steam_game_running():
-    """True while any Steam-launched title is alive. Every Steam launch —
-    native or Proton alike — goes through the client's wrapper chain with
+    """True while any Steam-launched title is alive. Every Steam launch -
+    native or Proton alike - goes through the client's wrapper chain with
     'SteamLaunch AppId=<id>' on the command line (steam-launch-wrapper and
     reaper both carry the marker and live exactly as long as the game), so
     one /proc cmdline sweep answers 'is a game running' without any Steam
     IPC. Needed because a game under Steam Input never opens the pad
-    itself — the client's permanent hold is all the holder scan sees."""
+    itself - the client's permanent hold is all the holder scan sees."""
     try:
         pids = [p for p in os.listdir("/proc") if p.isdigit()]
     except OSError:
@@ -336,7 +336,7 @@ def steam_game_running():
 def hidraw_holders(nodes):
     """PIDs of other processes holding an open fd on any of the given
     /dev/hidrawN nodes. Only same-user processes are visible without
-    privileges — which is exactly the population that matters here (Steam,
+    privileges - which is exactly the population that matters here (Steam,
     games, launchers all run as the desktop user)."""
     holders = set()
     if not nodes:
@@ -368,7 +368,7 @@ def ident_of(vendor, product, uniq, phys=""):
     """Stable identity of a physical pad across reconnects and node churn:
     the BT MAC / serial when the pad reports one; else the physical
     attachment point (distinguishes two IDENTICAL uniq-less pads, e.g. two
-    USB Xbox pads on xpad — stable within a session, though not across a
+    USB Xbox pads on xpad - stable within a session, though not across a
     port change); else vendor:product as the last resort."""
     if uniq:
         return uniq
@@ -392,7 +392,7 @@ def scan_controllers(exclude_paths=frozenset()):
         try:
             phys = dev.phys or ""
             # Our own virtual output pads: python-evdev stamps every uinput
-            # device it creates with its phys marker, so that — not the name —
+            # device it creates with its phys marker, so that - not the name -
             # is the reliable tell. The name may only exclude when phys is
             # empty: xpad names a REAL wired Xbox 360 pad exactly like
             # VIRTUAL_XBOX, but a physical pad always carries its usb/bt
@@ -409,7 +409,7 @@ def scan_controllers(exclude_paths=frozenset()):
             family = VENDOR_FAMILY.get(dev.info.vendor)
             if not family:
                 continue
-            # Must be an actual gamepad — excludes headset / motion-sensor /
+            # Must be an actual gamepad - excludes headset / motion-sensor /
             # touchpad / consumer-control nodes that share the same vendor id.
             keys = dev.capabilities().get(e.EV_KEY, [])
             if e.BTN_GAMEPAD not in keys and e.BTN_SOUTH not in keys:
@@ -463,7 +463,7 @@ class Remapper(threading.Thread):
 
     def run(self):
         # Everything the loop allocates (source fd, virtual uinput, selector)
-        # is tracked here so the single finally can release it on ANY exit —
+        # is tracked here so the single finally can release it on ANY exit -
         # including the early error returns below. The self-pipe fds are opened
         # in __init__, so they must be closed on every path too; leaking them
         # (as an earlier version did when grab() failed) exhausts the daemon's
@@ -501,7 +501,7 @@ class Remapper(threading.Thread):
                 print(f"remapper: grab failed for {self._src_path}: {ex}", file=sys.stderr)
                 return
 
-            print(f"remapper: {src.name} → {self._target['name']} "
+            print(f"remapper: {src.name} -> {self._target['name']} "
                   f"({self._virtual_path})", file=sys.stderr)
 
             sel = selectors.DefaultSelector()
@@ -559,13 +559,13 @@ class ControllerInstance:
         # instead of churning the tray menu.
         self.ident   = ident_of(vendor, product, uniq, phys)
         self.hidraw  = hidraw     # list of /dev/hidrawN (may be empty)
-        # DualSense lightbar via the kernel LED class (…:rgb:indicator); None for
+        # DualSense lightbar via the kernel LED class (...:rgb:indicator); None for
         # Xbox pads or when the node can't be resolved. Re-resolved per instance,
         # so it tracks the node renumbering that happens on every BT reconnect.
         self.led     = led_indicator_for_event(path) if family == "ps5" else None
         # Stable player number in overall connection order (first-connected
         # pad = 1), assigned by the manager at adoption and freed on removal.
-        # Shown on the DualSense white player LEDs and in the tray label —
+        # Shown on the DualSense white player LEDs and in the tray label -
         # deliberately OURS, not the kernel's: the kernel re-allocates its id
         # on every gate rebind, and Steam renumbers its slots on every
         # (re)enumeration, so both drift under mode switches.
@@ -588,15 +588,15 @@ class ControllerInstance:
     def _apply_led(self):
         """Set the lightbar colour for the current mode via a raw HID output
         report (hidraw), which also clears the DualSense firmware 'light out'
-        latch — a kernel LED-class write does not, so a latched pad would stay
+        latch - a kernel LED-class write does not, so a latched pad would stay
         physically dark. Re-resolves the live nodes from the evdev path on every
         call and never trusts a cached name: both the hidraw and the
-        …:rgb:indicator node renumber on every (BT) reconnect. No-op for Xbox
+        ...:rgb:indicator node renumber on every (BT) reconnect. No-op for Xbox
         pads or when nothing resolves."""
         if self.family != "ps5":
             return
         # Every apply (whatever triggered it) pushes the next slow re-assert
-        # out by one full period — the assert is a backstop, not a metronome.
+        # out by one full period - the assert is a backstop, not a metronome.
         self._assert_at = time.monotonic() + 15.0
         # Track the rgb-indicator node name so refresh_led can spot a renumber.
         self.led = led_indicator_for_event(self.path)
@@ -607,7 +607,7 @@ class ControllerInstance:
         """Re-assert this pad's player number on its white player LEDs. Same
         churn problem as the lightbar: the kernel re-allocates its player id
         on every gate rebind and Steam rewrites its own slot count raw on
-        every (re)enumeration — the daemon's adoption-ordered number is the
+        every (re)enumeration - the daemon's adoption-ordered number is the
         one that stays put. The LED names share the pad's live inputN prefix
         with the rgb indicator, so resolve it from there."""
         if self.family != "ps5" or not self.player:
@@ -618,8 +618,8 @@ class ControllerInstance:
 
     def refresh_led(self):
         """Repaint the lightbar when its LED node has renumbered under us. The
-        …:rgb:indicator node is named after the inputN instance, which bumps on
-        every (BT) reconnect *even when the /dev/input/eventX path is reused* — so
+        ...:rgb:indicator node is named after the inputN instance, which bumps on
+        every (BT) reconnect *even when the /dev/input/eventX path is reused* - so
         the path-keyed rebind() never sees the change and the daemon would keep
         painting the old, now-dead node (a mode switch then changes no colour).
         Called each monitor tick: when the live node differs from the one we last
@@ -632,43 +632,43 @@ class ControllerInstance:
 
     def watch_holders(self, steam_game=False):
         """Resting-colour policy for ps5-native (remap modes need none of
-        this — there the gate guarantees exclusive LED ownership). The
+        this - there the gate guarantees exclusive LED ownership). The
         question each tick is: does the lightbar belong to a GAME right
         now? Two signals answer it (the Steam client holds every pad
         permanently with PlayStation support enabled, so the holder set
         alone no longer can):
 
-        * steam_game — a Steam-launched title is alive (manager-wide
+        * steam_game - a Steam-launched title is alive (manager-wide
           cmdline sweep, see steam_game_running). Games under Steam Input
           never open the pad themselves, the client does it for them;
-        * a FOREIGN holder — any raw-HID holder that is not the Steam
+        * a FOREIGN holder - any raw-HID holder that is not the Steam
           client. Direct-access titles (Steam Input disabled per game,
           Lutris/Wine, emulators) open the pad in their own name.
 
         While either is true the lightbar is legitimately the game's:
         hands off, cancel pending repaints. Otherwise the resting colour
-        is OURS — the idle client paints its slot colours only on discrete
+        is OURS - the idle client paints its slot colours only on discrete
         events (startup, adopt, game exit) and stays quiet in between, so
         the daemon re-asserts the mode colour after each of them
-        (rewriting an unchanged colour is visually a no-op — this is not
+        (rewriting an unchanged colour is visually a no-op - this is not
         the paint war the native mode must avoid):
 
         * a RELEASER closed a raw fd (game exited, Steam quit): it may
           leave the lightbar firmware-latched dark ('light out' setup flag
-          — kernel LED writes then change nothing until the driver
-          re-probes), so rearm (driver rebind → fresh lightbar setup) and
+          - kernel LED writes then change nothing until the driver
+          re-probes), so rearm (driver rebind -> fresh lightbar setup) and
           repaint. Deferred while a game is still active: the rebind
           would yank the running game's fd;
         * suppression ended with no fd ever closing (a Steam Input game
-          exited): the client restores its slot colour on the way out —
+          exited): the client restores its slot colour on the way out -
           one repaint shortly after gets the last word, no rearm needed;
         * the client (re)opened the pad (enumeration after one of our
           rebinds, or a client start): writes its defaults once and goes
-          quiet — one delayed repaint outlasts it (field-verified: Steam
+          quiet - one delayed repaint outlasts it (field-verified: Steam
           reopened ~6 s after a rebind and stomped the fresh colour);
         * backstop: a slow periodic re-assert (_assert_at, one period
           after whatever painted last) recovers the mode colour from
-          anything unforeseen — so the pad shows its mode at a glance at
+          anything unforeseen - so the pad shows its mode at a glance at
           all times outside a running game.
 
         The scheduled one-shot repaint at the end fires in remap modes too:
@@ -707,7 +707,7 @@ class ControllerInstance:
                 if (now >= self._assert_at
                         and not (self._repaint_at is not None
                                  and now >= self._repaint_at)):
-                    # Backstop paint — unless a one-shot fires this very
+                    # Backstop paint - unless a one-shot fires this very
                     # tick anyway (below); _apply_led reschedules _assert_at.
                     self._apply_led()
         if self._repaint_at is not None and now >= self._repaint_at:
@@ -735,7 +735,7 @@ class ControllerInstance:
         """Stop existing remapper, transition the hidraw gate, start a new
         remapper if needed, update LED. A gate state transition rebinds the
         kernel driver (to revoke foreign fds and reset the lightbar latch),
-        which renumbers this pad's device nodes — so re-resolve them before
+        which renumbers this pad's device nodes - so re-resolve them before
         grabbing, and never grab before gating (the rebind would kill the
         grab again)."""
         if self._remap:
@@ -746,17 +746,17 @@ class ControllerInstance:
 
         target = self._target_for_mode()
         # Hide this pad's raw HID path from applications before the remapper
-        # takes over (the evdev grab alone does not cover hidraw) — or reopen
+        # takes over (the evdev grab alone does not cover hidraw) - or reopen
         # it when returning to native.
         hidraw_gate("block" if target else "restore", self.uniq, self.hidraw)
         self._refresh_nodes()
         if adopt and not target and hidraw_holders(self.hidraw):
             # Adoption found the pad already opened by someone else: that fd
             # predates us (Steam Input grabs every pad the moment it connects)
-            # and may have firmware-latched the lightbar dark — a state no
+            # and may have firmware-latched the lightbar dark - a state no
             # later kernel LED write can clear. Gating relies on marker
             # TRANSITIONS to rebind, and a freshly paired identity has no
-            # marker, so the restore above never rebound — force it here.
+            # marker, so the restore above never rebound - force it here.
             # Holders that arrive THROUGH a restore rebind never hit this:
             # their nodes are renumbered and reopen only seconds later.
             hidraw_gate("rearm", self.uniq, self.hidraw)
@@ -772,11 +772,11 @@ class ControllerInstance:
 
         # The gate transition above may have rebound the driver: every old
         # holder fd is dead, and enumerators (Steam) will REOPEN the reborn
-        # nodes in a few seconds and write their defaults once —
+        # nodes in a few seconds and write their defaults once -
         # watch_holders outlasts that with a fresh delayed repaint. The
         # repaint here is scheduled unconditionally: the immediate write
         # below races the BT re-probe after a rebind and can be dropped by
-        # the pad — the delayed re-assert is what makes the colour stick
+        # the pad - the delayed re-assert is what makes the colour stick
         # (in remap modes too, where the holder policy itself is inactive).
         self._holders    = set()
         self._repaint_at = time.monotonic() + 6.0
@@ -788,7 +788,7 @@ class ControllerInstance:
         the pad's kernel nodes down and recreated them renumbered. Polls
         briefly because the re-probe takes a moment; when nothing was rebound
         the first scan simply confirms the existing binding. If the pad does
-        not come back in time the stale path is dropped — the monitor's
+        not come back in time the stale path is dropped - the monitor's
         reconcile rebinds when it reappears."""
         deadline = time.monotonic() + timeout
         while True:
@@ -808,11 +808,11 @@ class ControllerInstance:
 
     def rebind(self, path, name, hidraw):
         """Same physical pad reappeared on a new evdev/hidraw node after a (BT)
-        reconnect. Refresh the node bindings and restart the remapper in place —
+        reconnect. Refresh the node bindings and restart the remapper in place -
         the instance (and thus its tray-menu entry) is kept, so the host sees no
         structural change. Deliberately NO gate 'restore' here: the gate is
         keyed by the pad's stable identity, so staying gated across a reconnect
-        is exactly right — the reborn nodes were already born gated (udev
+        is exactly right - the reborn nodes were already born gated (udev
         rule), and apply_mode re-asserts the gate idempotently."""
         self.path   = path
         self.name   = name
@@ -848,19 +848,19 @@ class ControllerInstance:
 # the instance down and rebuild it, churning the tray menu into stuck-disabled
 # items. Instances are keyed by stable identity (BT MAC / serial), so a pad that
 # returns within the window is rebound in place instead of removed and re-added.
-REMOVE_GRACE = 5.0   # seconds; ~2× the 2 s poll interval
+REMOVE_GRACE = 5.0   # seconds; ~2x the 2 s poll interval
 
 # Grace before a GAP in the player numbering (a pad switched off long enough to
 # be dropped) is compacted away, closing the hole so the remaining players are
 # renumbered to a contiguous 1..N. Deliberately long: a controller whose
 # battery/accu dies and is swapped returns within this window, reclaims its old
-# number (see _poll's adoption path) and never triggers a renumber — only a pad
+# number (see _poll's adoption path) and never triggers a renumber - only a pad
 # that stays off past it gives up its slot. Auto-compaction lives in _poll; the
 # tray 'Renumber players' entry forces it immediately.
 COMPACT_GRACE = 300.0   # seconds (5 minutes)
 
 def _numbering_gap(players):
-    """True when a set of player numbers is not a contiguous 1..N — i.e. a
+    """True when a set of player numbers is not a contiguous 1..N - i.e. a
     removed pad left a hole compaction can close. Falsy numbers are ignored."""
     nums = sorted(p for p in players if p)
     return nums != list(range(1, len(nums) + 1))
@@ -868,7 +868,7 @@ def _numbering_gap(players):
 class ControllerManager:
     def __init__(self, on_change_cb):
         self._lock       = threading.Lock()
-        self._instances  = {}      # ident → ControllerInstance
+        self._instances  = {}      # ident -> ControllerInstance
         self._config     = load_config()
         self._on_change  = on_change_cb   # called (from thread) when list changes
         self._monitor_th = threading.Thread(target=self._monitor, daemon=True)
@@ -880,7 +880,7 @@ class ControllerManager:
         # Populate instances synchronously so the first menu we publish already
         # reflects connected controllers. Registering an empty menu and mutating
         # it afterwards makes the host recycle item ids across a structural change
-        # (separator→radio, header relabel), which leaves entries stuck disabled.
+        # (separator->radio, header relabel), which leaves entries stuck disabled.
         # Then run the periodic monitor for hotplug.
         self._poll()
         self._monitor_th.start()
@@ -899,12 +899,12 @@ class ControllerManager:
 
     @staticmethod
     def _ident(d):
-        """Stable identity of a scanned controller — matches ControllerInstance.ident."""
+        """Stable identity of a scanned controller - matches ControllerInstance.ident."""
         return ident_of(d["vendor"], d["product"], d["uniq"], d["phys"])
 
     def _poll(self):
         """One scan/reconcile pass; returns True if the *set* of controllers
-        changed. A reconnect that only moves a pad to a new node does not count —
+        changed. A reconnect that only moves a pad to a new node does not count -
         it is rebound in place, so the tray menu is left untouched."""
         found = {}
         for d in self._scan():
@@ -933,12 +933,12 @@ class ControllerManager:
                 elif was_gone or not inst.remap_healthy():
                     # Two ways a pad can look unchanged yet be broken underneath:
                     #  * reconnected on the *reused* evdev path (BT re-pair /
-                    #    power-cycle): same eventX number, fresh device below —
+                    #    power-cycle): same eventX number, fresh device below -
                     #    the old grab died and the firmware reset the lightbar;
                     #  * a BT blip shorter than one poll killed the remapper's
                     #    grab without the pad ever appearing absent (the thread
                     #    is dead but the mode still wants a remap).
-                    # Both: re-assert the whole mode — restart the remapper,
+                    # Both: re-assert the whole mode - restart the remapper,
                     # re-gate the hidraw node, repaint the lightbar.
                     inst.rebind(d["path"], d["name"], d["hidraw"])
                     churned = True
@@ -958,7 +958,7 @@ class ControllerManager:
                     d["family"], mode, d["uniq"], d["phys"], d["hidraw"])
                 # Overall connection order: a pad keeps the number it was
                 # FIRST adopted under ("_players" in the config, keyed like
-                # the modes by stable ident) — daemon restarts re-adopt in
+                # the modes by stable ident) - daemon restarts re-adopt in
                 # evdev node order, which the gate rebinds shuffle, so the
                 # session order alone would swap numbers between restarts.
                 # Fresh pads (or a persisted number currently worn by another
@@ -979,7 +979,7 @@ class ControllerManager:
             if churned:
                 self._arm_player_reassert()
             # Auto-compaction: once a dropped pad leaves the connected numbers
-            # non-contiguous, close the gap after COMPACT_GRACE — long enough
+            # non-contiguous, close the gap after COMPACT_GRACE - long enough
             # for a battery/accu swap to return and reclaim the number first,
             # so a brief power-off never renumbers the remaining players. A gap
             # that heals on its own (pad came back) disarms the timer.
@@ -1033,7 +1033,7 @@ class ControllerManager:
 
     def _arm_player_reassert(self):
         """A gate/driver rebind makes enumerators (Steam) recount and rewrite
-        THEIR player slots raw on every pad they hold — not just the rebound
+        THEIR player slots raw on every pad they hold - not just the rebound
         one. Schedule a one-shot re-assert of our stable numbers on all ps5
         pads once that write has passed. Called under the manager lock."""
         for inst in self._instances.values():
@@ -1049,7 +1049,7 @@ class ControllerManager:
         """Compact the connected pads' player numbers to a contiguous 1..N,
         preserving their relative order: the numbers shift, but two continuously
         connected pads never swap places and nobody overtakes anybody. The
-        stale reservations of absent pads in _players are left untouched — a
+        stale reservations of absent pads in _players are left untouched - a
         returning pad finds its old number now worn by a lower-numbered peer,
         so it takes the next free one instead of reopening the closed gap.
         Returns True if any number changed. Caller holds the lock and is
@@ -1110,17 +1110,17 @@ class DbusmenuServer(dbus.service.Object):
         self._revision = 1
         # Cached menu model. Every dbusmenu call (GetLayout, GetGroupProperties,
         # GetProperty, Event) answers from this one snapshot, so within a
-        # revision a host can never observe two different id→item mappings —
+        # revision a host can never observe two different id->item mappings -
         # rebuilding per call let the instance list shift between a host's
         # GetLayout and its Event, misrouting the click.
         self._items    = []    # ordered [(id, props-dict)], Quit last
-        self._lookup   = {}    # id → (controller ident, mode) for radio items
-        self._actions  = {}    # id → action name for plain command items
+        self._lookup   = {}    # id -> (controller ident, mode) for radio items
+        self._actions  = {}    # id -> action name for plain command items
         self._sig      = None  # structural signature of the cached model
         # Item ids come from this counter and are NEVER reused for a different
         # item. The GNOME appindicator host caches item properties per id and
         # does not refresh them when a layout change reuses an id for a
-        # structurally different item (separator→radio after a controller
+        # structurally different item (separator->radio after a controller
         # connects), leaving entries stuck disabled. Fresh ids per structural
         # change force the host to treat them as new items and fetch fresh
         # properties. Display-only changes keep their ids and are pushed as
@@ -1140,7 +1140,7 @@ class DbusmenuServer(dbus.service.Object):
     def _inst_label(self, inst, instances):
         """'DualSense' for a unique model; 'DualSense <player>' when duplicates
         exist. The player number is the same one shown on the pad's white
-        player LEDs, so menu and hardware always agree — a positional index
+        player LEDs, so menu and hardware always agree - a positional index
         would flip after a drop-and-readopt while the LEDs kept the number."""
         peers = [i for i in instances if i.name == inst.name]
         if len(peers) == 1:
@@ -1150,7 +1150,7 @@ class DbusmenuServer(dbus.service.Object):
         return f"{inst.name} {peers.index(inst) + 1}"
 
     def _semantic_items(self):
-        """The menu as plain (kind, …) tuples, before ids and dbus types:
+        """The menu as plain (kind, ...) tuples, before ids and dbus types:
         ('info', label) | ('header', ident, label)
         | ('radio', ident, mode, label, checked) | ('sep',)."""
         instances = self._mgr.get_instances()
@@ -1176,7 +1176,7 @@ class DbusmenuServer(dbus.service.Object):
                                     MODE_LABELS[mode], inst.mode == mode))
                 if inst is not instances[-1]:
                     sem.append(("sep",))
-        # Offer a manual compaction only while a gap actually exists — with a
+        # Offer a manual compaction only while a gap actually exists - with a
         # contiguous numbering the entry would be a no-op and just clutter.
         if _numbering_gap(getattr(i, "player", None) for i in instances):
             sem.append(("sep",))
@@ -1206,7 +1206,7 @@ class DbusmenuServer(dbus.service.Object):
     @staticmethod
     def _structure_sig(sem):
         """What defines an item's KIND and click target. Labels and
-        toggle-state are volatile display state — excluded here, so they
+        toggle-state are volatile display state - excluded here, so they
         update in place via ItemsPropertiesUpdated without an id change."""
         sig = []
         for entry in sem:
@@ -1250,7 +1250,7 @@ class DbusmenuServer(dbus.service.Object):
             return
 
         # Same structure: positions align pairwise with the cached items
-        # (Quit, cached last, has no semantic entry — zip stops before it).
+        # (Quit, cached last, has no semantic entry - zip stops before it).
         updated = []
         for (id_, props), entry in zip(self._items, sem):
             new = self._props_for(entry)
@@ -1296,8 +1296,8 @@ class DbusmenuServer(dbus.service.Object):
     def GetGroupProperties(self, ids, propertyNames):
         if self._sig is None:
             self._rebuild()
-        want  = {int(i) for i in ids}            # empty → all items, per spec
-        names = {str(n) for n in propertyNames}  # empty → all properties
+        want  = {int(i) for i in ids}            # empty -> all items, per spec
+        names = {str(n) for n in propertyNames}  # empty -> all properties
         result = []
         for id_, props in self._items:
             if want and id_ not in want:
@@ -1399,7 +1399,7 @@ class TrayIcon(dbus.service.Object):
         title = "Controller Manager"
         if instances:
             tip = "\n".join(
-                f"{inst.name} — {MODE_LABELS[inst.mode]}" for inst in instances)
+                f"{inst.name} - {MODE_LABELS[inst.mode]}" for inst in instances)
         else:
             tip = "No controller connected"
 
@@ -1511,7 +1511,7 @@ def main():
     # Two points matter:
     #   * It must run inside the main loop (watch_name_owner delivers the current
     #     owner asynchronously, i.e. once loop.run() is servicing requests), so we
-    #     can answer the watcher's verification call-back — registering before the
+    #     can answer the watcher's verification call-back - registering before the
     #     loop races and the entry silently never appears.
     #   * It must NOT register twice for the same owner: a duplicate
     #     RegisterStatusNotifierItem makes the host reset the indicator, which

@@ -3,15 +3,15 @@
 # While a pad is gated (marker under /run/controller-manager/gated), its
 # hidraw nodes must be BORN inaccessible: the gate rebinds the HID driver to
 # revoke existing fds, and without this rule the reborn node would be open
-# for a moment — long enough for Steam's udev hotplug to reopen it.
+# for a moment - long enough for Steam's udev hotplug to reopen it.
 #
-# Filename 72-: AFTER the whole 71-*-controllers.rules family — steam-devices
+# Filename 72-: AFTER the whole 71-*-controllers.rules family - steam-devices
 # ships e.g. 71-sony-controllers.rules, which re-adds MODE 0660 and the
 # uaccess tag for DualSense hidraw and must not get the last word (verified
 # in the field: with this rule at 71-, the pad's node came back 0660+ACL and
 # Steam repainted the lightbar in a gated mode). Still BEFORE
 # 73-seat-late.rules, which turns the uaccess tag into a seat-user ACL that
-# would tunnel through MODE 0000 — removing the tag here prevents that, and
+# would tunnel through MODE 0000 - removing the tag here prevents that, and
 # TAG-= has no final-assignment form, so the ordering is what protects it.
 # MODE/GROUP use ':=' (final assignment): no later rule can override them.
 #

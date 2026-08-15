@@ -4,7 +4,7 @@
 
 A small system-wide daemon that remaps game controllers between protocols on Linux,
 controlled from a tray icon. It presents a physical controller to applications under a
-different identity — for example, exposing a Sony DualSense as an Xbox 360 pad so that
+different identity - for example, exposing a Sony DualSense as an Xbox 360 pad so that
 applications which only speak the XInput protocol see a controller they understand.
 
 ## About
@@ -17,7 +17,7 @@ per-application and fragile.
 Controller Manager solves this once, at the system level: it grabs the physical device
 on the kernel's input layer and re-emits its events through a **virtual** controller of
 the target type, before any application enumerates devices. The remap is selected per
-controller from a tray menu and applies uniformly to every launcher and application —
+controller from a tray menu and applies uniformly to every launcher and application -
 there is no per-application configuration.
 
 This repository is a self-contained tool and a worked example of a Linux input pipeline:
@@ -26,22 +26,22 @@ This repository is a self-contained tool and a worked example of a Linux input p
 
 ## Features
 
-- **Per-controller remapping** — each connected controller has its own mode (native or
+- **Per-controller remapping** - each connected controller has its own mode (native or
   remapped), chosen from the tray.
-- **Multiple controllers at once** — two identical pads are tracked independently via a
+- **Multiple controllers at once** - two identical pads are tracked independently via a
   stable per-device identity, so one can be native while the other is remapped.
-- **Launcher-agnostic** — works at the device layer, so every application sees the result
+- **Launcher-agnostic** - works at the device layer, so every application sees the result
   regardless of how it was started.
-- **Raw HID gating** — closes the double-input gap that an `evdev` grab alone leaves
+- **Raw HID gating** - closes the double-input gap that an `evdev` grab alone leaves
   open, including against processes that opened the pad before the gate (Steam Input)
   (see [the hidraw gate decision](docs/decisions/hidraw-gate.md)).
-- **Lightbar status colours (DualSense)** — the pad shows its active mode at a glance:
+- **Lightbar status colours (DualSense)** - the pad shows its active mode at a glance:
   **blue** = native, **green** = Xbox emulation. Games may take the lightbar over while
   they run; the resting colour returns when they exit (see
   [Steam coexistence](docs/decisions/steam-coexistence.md)).
-- **Hotplug aware** — controllers may be connected and disconnected at any time; the tray
+- **Hotplug aware** - controllers may be connected and disconnected at any time; the tray
   menu updates automatically.
-- **No daemon dependencies beyond the standard desktop stack** — `python-evdev`,
+- **No daemon dependencies beyond the standard desktop stack** - `python-evdev`,
   `dbus-python`, and `PyGObject`.
 
 ## How it works
@@ -49,7 +49,7 @@ This repository is a self-contained tool and a worked example of a Linux input p
 ```
 Physical controller (evdev /dev/input/eventX)
    │
-   ├── native mode ──────────► device passes through unchanged
+   ├── native mode ──────────> device passes through unchanged
    │
    └── remap mode
          ├── evdev grab (EVIOCGRAB)     exclusive kernel access to the source
@@ -95,12 +95,12 @@ session, then installs the root-owned hidraw gate helper, its udev rule and its 
 (this step asks for a password). For the full procedure with verification and rollback,
 follow the [installation runbook](runbooks/install.md).
 
-**If you use Steam:** set *Settings → Controller → PlayStation controller support* to
+**If you use Steam:** set *Settings -> Controller -> PlayStation controller support* to
 **"Enabled in Games w/o Support"** (not "Enabled", not off). The Steam client then holds
 the pad permanently, but the daemon classifies game-vs-idle and restores the resting
 lightbar colour whenever no game runs; titles keep their native DualSense features. Also
 set *Xbox controller support* off. Turning PlayStation support off entirely is the one
-broken middle ground — Steam still opens the pad to identify it and latches the lightbar
+broken middle ground - Steam still opens the pad to identify it and latches the lightbar
 for no benefit. Details and trade-offs: [Steam coexistence](docs/decisions/steam-coexistence.md).
 
 ## Usage
@@ -110,7 +110,7 @@ items. Selecting a mode applies it immediately and persists it.
 
 | Controller family | Modes offered |
 |---|---|
-| PlayStation (DualSense) | **Native** · **Output as Xbox** |
+| PlayStation (DualSense) | **Native**; **Output as Xbox** |
 | Xbox | **Native** |
 
 The reverse direction (output a PlayStation identity from an Xbox pad) is intentionally
@@ -144,7 +144,7 @@ pads, over USB and Bluetooth.
 
 - [Architecture Overview](docs/architecture/overview.md)
 - Design decisions:
-  - [Remapping engine — evdev grab + uinput](docs/decisions/remapping-engine.md)
+  - [Remapping engine - evdev grab + uinput](docs/decisions/remapping-engine.md)
   - [The hidraw gate](docs/decisions/hidraw-gate.md)
   - [Per-device identity](docs/decisions/per-device-identity.md)
   - [Output protocol constraints](docs/decisions/output-protocol-constraints.md)
@@ -161,7 +161,7 @@ pads, over USB and Bluetooth.
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the commit format,
+Contributions are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md) for the commit format,
 validation script, and documentation conventions.
 
 ## License

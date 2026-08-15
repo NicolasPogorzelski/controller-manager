@@ -26,7 +26,7 @@ if [ "${#missing[@]}" -gt 0 ]; then
     exit 1
 fi
 if [ ! -r /sys/kernel/btf/vmlinux ]; then
-    echo "hid-bpf/build.sh: /sys/kernel/btf/vmlinux not found — kernel lacks BTF" >&2
+    echo "hid-bpf/build.sh: /sys/kernel/btf/vmlinux not found - kernel lacks BTF" >&2
     echo "  (CONFIG_DEBUG_INFO_BTF); HID-BPF cannot be built on this kernel." >&2
     exit 1
 fi

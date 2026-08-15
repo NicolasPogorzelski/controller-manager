@@ -1,6 +1,6 @@
 """Regression test for the lightbar ownership policy with the Steam client
 as a PERMANENT holder (PlayStation controller support enabled). The old
-holder-delta model could not tell the idle client from a running game — the
+holder-delta model could not tell the idle client from a running game - the
 policy now classifies instead of counting:
 
   * steam_game (manager-wide 'SteamLaunch AppId=' cmdline sweep) marks Steam
@@ -10,7 +10,7 @@ policy now classifies instead of counting:
 
 While either is true the lightbar is the game's (hands off); otherwise the
 daemon re-asserts the mode colour: delayed repaint after client (re)opens,
-repaint shortly after a Steam Input game exits (no rearm — nothing closed),
+repaint shortly after a Steam Input game exits (no rearm - nothing closed),
 rearm + repaint after any raw fd closed (latch risk), deferred while a game
 is still active, plus a slow periodic backstop so the colour is visible at
 a glance at all times outside a running game.
@@ -30,7 +30,7 @@ try:
     cm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
-    print(f"SKIP: runtime dependency missing ({ex.name}) — needs evdev/dbus/gi")
+    print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
     sys.exit(0)
 
 fails = []
@@ -98,7 +98,7 @@ base = len(led_calls)
 check(base == 2 and gate_calls == ["restore"],
       "baseline: adoption paint + one-shot re-assert, no rearm")
 
-# ── A: the idle client (re)opens the pad → one delayed repaint wins ─────────
+# ── A: the idle client (re)opens the pad -> one delayed repaint wins ─────────
 print("Scenario A: Steam client opens the pad idle -> colour re-asserted")
 holders[0] = {501}
 clock[0] += 2.0
@@ -110,7 +110,7 @@ check(len(led_calls) == base + 1 and gate_calls == ["restore"],
       "delayed repaint outlasted the client's slot-colour write, no rearm")
 base += 1
 
-# ── B: Steam Input game running → hands off, backstop paused ────────────────
+# ── B: Steam Input game running -> hands off, backstop paused ────────────────
 print("Scenario B: Steam Input game running -> no repaint, no backstop")
 inst._repaint_at = clock[0] + 6.0    # pretend something armed a repaint
 clock[0] += 30.0                     # far past any backstop period
@@ -118,7 +118,7 @@ inst.watch_holders(steam_game=True)
 check(inst._repaint_at is None, "pending repaint cancelled at game start")
 check(len(led_calls) == base, "no backstop write while the game owns the pad")
 
-# ── C: Steam Input game exits (no fd ever closed) → repaint, NO rearm ───────
+# ── C: Steam Input game exits (no fd ever closed) -> repaint, NO rearm ───────
 print("Scenario C: Steam Input game exits -> outlast the exit restore")
 clock[0] += 2.0
 inst.watch_holders()                 # first quiet tick after the game
@@ -126,10 +126,10 @@ check(len(led_calls) == base, "no write racing Steam's exit restore")
 clock[0] += 3.5
 inst.watch_holders()
 check(len(led_calls) == base + 1, "repaint shortly after the exit")
-check(gate_calls == ["restore"], "no rearm — no raw fd was closed")
+check(gate_calls == ["restore"], "no rearm - no raw fd was closed")
 base += 1
 
-# ── D: direct-access title (foreign holder) → suppress; exit → rearm ────────
+# ── D: direct-access title (foreign holder) -> suppress; exit -> rearm ────────
 print("Scenario D: foreign holder suppresses; its exit rearms (latch risk)")
 holders[0] = {501, 777}              # Lutris/Wine title opened the pad itself
 clock[0] += 2.0
@@ -148,7 +148,7 @@ clock[0] += 6.5
 inst.watch_holders()                 # armed one-shot after the rearm
 base = len(led_calls)
 
-# ── E: fd closes while a Steam game still runs → rearm deferred ─────────────
+# ── E: fd closes while a Steam game still runs -> rearm deferred ─────────────
 print("Scenario E: release during an active game defers the rearm")
 holders[0] = {501, 888}
 clock[0] += 2.0

@@ -22,32 +22,32 @@ cd controller-manager
 `install.sh` performs:
 
 1. **User space** (no privileges):
-   - `controller-manager.py` → `~/.local/bin/controller-manager.py`
-   - `controller-manager.service` → `~/.config/systemd/user/controller-manager.service`
+   - `controller-manager.py` -> `~/.local/bin/controller-manager.py`
+   - `controller-manager.service` -> `~/.config/systemd/user/controller-manager.service`
 2. **Root space** (asks for a password):
-   - `controller-hidraw-gate` → `/usr/local/bin/controller-hidraw-gate` (root, `0755`)
-   - `controller-led` → `/usr/local/bin/controller-led` (root, `0755`)
-   - `72-controller-manager.rules` → `/etc/udev/rules.d/` (root, `0644`), then
-     `udevadm control --reload` — gated hidraw nodes must be born inaccessible
-   - `controller-hidraw.sudoers` → `/etc/sudoers.d/controller-hidraw` (root, `0440`)
+   - `controller-hidraw-gate` -> `/usr/local/bin/controller-hidraw-gate` (root, `0755`)
+   - `controller-led` -> `/usr/local/bin/controller-led` (root, `0755`)
+   - `72-controller-manager.rules` -> `/etc/udev/rules.d/` (root, `0644`), then
+     `udevadm control --reload` - gated hidraw nodes must be born inaccessible
+   - `controller-hidraw.sudoers` -> `/etc/sudoers.d/controller-hidraw` (root, `0440`)
    - `visudo -c` to validate the sudoers files
 3. **Service**: `daemon-reload`, `enable` (autostart with the session) and restart, then
    prints the active state.
 
-If Steam is used on the machine, set **Settings → Controller → PlayStation controller
+If Steam is used on the machine, set **Settings -> Controller -> PlayStation controller
 support** to **"Enabled in Games w/o Support"** and **Xbox controller support off** in the
-Steam client (turning PlayStation support off entirely is the one broken state) — see
+Steam client (turning PlayStation support off entirely is the one broken state) - see
 [Steam coexistence](../docs/decisions/steam-coexistence.md) for why and what it costs.
 
 ## Verification
 
 ```bash
 # Service is running
-systemctl --user is-active controller-manager.service        # → active
+systemctl --user is-active controller-manager.service        # -> active
 
 # Privileged helper is in place and root-owned
-ls -l /usr/local/bin/controller-hidraw-gate                  # → -rwxr-xr-x root root
-sudo visudo -cf /etc/sudoers.d/controller-hidraw             # → parsed OK
+ls -l /usr/local/bin/controller-hidraw-gate                  # -> -rwxr-xr-x root root
+sudo visudo -cf /etc/sudoers.d/controller-hidraw             # -> parsed OK
 ```
 
 The tray icon should appear and list connected controllers with their modes. To confirm
@@ -58,9 +58,9 @@ the remapping path end to end, follow [verify a remap](verify-remapping.md).
 | Symptom | Check |
 |---|---|
 | `install.sh` aborts at the root step | `sudo` requires a password / is unavailable; run it in an interactive shell |
-| Service is `failed` after restart | `journalctl --user -u controller-manager.service -n 30` — usually a missing Python dependency |
-| Tray icon never appears | StatusNotifierItem tray host missing — see [troubleshooting](../docs/troubleshooting.md) |
-| Remap produces double input | hidraw gate not installed or active — see [the hidraw gate](../docs/decisions/hidraw-gate.md) |
+| Service is `failed` after restart | `journalctl --user -u controller-manager.service -n 30` - usually a missing Python dependency |
+| Tray icon never appears | StatusNotifierItem tray host missing - see [troubleshooting](../docs/troubleshooting.md) |
+| Remap produces double input | hidraw gate not installed or active - see [the hidraw gate](../docs/decisions/hidraw-gate.md) |
 
 ## Rollback
 

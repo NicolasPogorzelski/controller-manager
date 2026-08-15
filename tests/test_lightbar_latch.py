@@ -3,15 +3,15 @@ and gate rebinds. Field bug (second DualSense, 2026-07-06): Steam Input holds
 a pad's hidraw fd from the moment it CONNECTS and firmware-latches the
 lightbar dark; for a freshly paired identity the adoption 'restore' is not a
 marker transition, so nothing rebound the driver and every later kernel LED
-write was a firmware no-op — tray and modes worked, the pad just never showed
+write was a firmware no-op - tray and modes worked, the pad just never showed
 a colour. Guards:
 
   * adoption of a native pad with pre-existing foreign holders forces a
     'rearm' (driver rebind resets the latch);
   * adoption without holders, and plain mode switches, must NOT rearm (a
     rearm yanks a running game's fd);
-  * after every apply_mode a one-shot delayed repaint is armed — the write
-    right after a rebind races the BT re-probe and can be dropped — and it
+  * after every apply_mode a one-shot delayed repaint is armed - the write
+    right after a rebind races the BT re-probe and can be dropped - and it
     fires in remap modes too, where the holder policy itself is inactive.
 
 Stubs the gate, holder scan, LED helpers and controller scan; the real
@@ -27,7 +27,7 @@ try:
     cm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
-    print(f"SKIP: runtime dependency missing ({ex.name}) — needs evdev/dbus/gi")
+    print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
     sys.exit(0)
 
 fails = []
@@ -79,7 +79,7 @@ def new_inst(mode):
 def reset():
     gate_calls.clear(); led_calls.clear(); holders[0] = set()
 
-# ── Scenario A: adoption with a pre-existing holder → rearm + latch reset ───
+# ── Scenario A: adoption with a pre-existing holder -> rearm + latch reset ───
 print("Scenario A: native adoption with Steam already holding -> rearm")
 reset()
 holders[0] = {12055}                       # Steam grabbed the pad at connect
@@ -103,14 +103,14 @@ check(led_calls == [(0, 0, 255), (0, 0, 255)],
 inst.watch_holders()
 check(len(led_calls) == 2,   "one-shot: no further repaint spam")
 
-# ── Scenario C: adoption without holders → no rearm ─────────────────────────
+# ── Scenario C: adoption without holders -> no rearm ─────────────────────────
 print("Scenario C: clean adoption never rebinds")
 reset()
 inst = new_inst("ps5-native")
 inst.apply_mode(adopt=True)
 check(gate_calls == ["restore"], "no holders -> restore only, no rearm")
 
-# ── Scenario D: plain mode switch with a game holding → no rearm ────────────
+# ── Scenario D: plain mode switch with a game holding -> no rearm ────────────
 print("Scenario D: non-adoption apply_mode leaves a running game's fd alone")
 reset()
 inst = new_inst("ps5-native")
@@ -119,16 +119,16 @@ holders[0] = {23456}                       # a game opened the pad
 gate_calls.clear()
 inst.apply_mode()                          # e.g. tray re-click of native
 check(gate_calls == ["restore"],
-      "no rearm outside adoption — the game keeps its fd")
+      "no rearm outside adoption - the game keeps its fd")
 
-# ── Scenario E: remap adoption → gate rebind suffices, repaint still armed ──
+# ── Scenario E: remap adoption -> gate rebind suffices, repaint still armed ──
 print("Scenario E: ps5-xbox adoption relies on block; repaint fires in remap mode")
 reset()
 holders[0] = {12055}
 inst = new_inst("ps5-xbox")
 inst.apply_mode(adopt=True)
 check(gate_calls == ["block"],
-      "block already rebinds — no extra rearm in a remap mode")
+      "block already rebinds - no extra rearm in a remap mode")
 check(led_calls == [(0, 128, 0)], "green written after the gate")
 holders[0] = set()
 clock[0] += 6.5

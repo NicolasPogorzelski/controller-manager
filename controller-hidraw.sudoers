@@ -1,7 +1,7 @@
 # Allow controller-manager (running as the installing user) to run its two
 # root-owned helpers without a password:
-#   controller-hidraw-gate — chmods /dev/hidraw* nodes of allowlisted controllers
-#   controller-led         — sets a Sony DualSense lightbar (raw HID output
+#   controller-hidraw-gate - chmods /dev/hidraw* nodes of allowlisted controllers
+#   controller-led         - sets a Sony DualSense lightbar (raw HID output
 #                            report) / player LEDs; validates the target is a
 #                            Sony (054C) device before writing
 # Both are tightly scoped and validate their target before touching anything.

@@ -9,18 +9,18 @@ driving the DualSense lightbar.
 ```
                          controller-manager.py (systemd --user)
                          ┌──────────────────────────────────────────────┐
- /dev/input/event*  ───► │ ControllerManager   (detect, hotplug, modes)  │
+ /dev/input/event*  ───> │ ControllerManager   (detect, hotplug, modes)  │
                          │   └─ ControllerInstance (one per device)       │
                          │        └─ Remapper thread (grab + uinput)      │
                          │                                                │
- D-Bus (session) ◄─────► │ TrayIcon (StatusNotifierItem)                  │
+ D-Bus (session) <─────> │ TrayIcon (StatusNotifierItem)                  │
                          │ DbusmenuServer (com.canonical.dbusmenu)        │
                          └───────────────┬────────────────────────────────┘
                                          │ sudo -n (NOPASSWD, scoped)
-                                         ▼
-                         controller-hidraw-gate ──► identity-keyed gate:
+                                         v
+                         controller-hidraw-gate ──> identity-keyed gate:
                          controller-led            marker + driver rebind
-                                  ▲                + lightbar colour
+                                  ^                + lightbar colour
                                   │ udev-check (PROGRAM)
                          72-controller-manager.rules: gated hidraw
                          nodes are BORN inaccessible (MODE 0000)
@@ -35,7 +35,7 @@ driving the DualSense lightbar.
 | Config | `~/.config/controller-modes.json` | persisted mode per device |
 | HID gate | `/usr/local/bin/controller-hidraw-gate` | identity-keyed gating: markers, driver rebind (fd revoke + lightbar rearm), chmod |
 | Gate udev rule | `/etc/udev/rules.d/72-controller-manager.rules` | gated hidraw nodes are born `MODE 0000`, without the uaccess tag |
-| Gate state | `/run/controller-manager/gated/<uniq>` | marker per gated pad (tmpfs — reboots fail open) |
+| Gate state | `/run/controller-manager/gated/<uniq>` | marker per gated pad (tmpfs - reboots fail open) |
 | LED helper | `/usr/local/bin/controller-led` | privileged write of a Sony `:rgb:indicator` lightbar |
 | Sudoers rule | `/etc/sudoers.d/controller-hidraw` | scoped NOPASSWD for the two helpers |
 
@@ -44,28 +44,28 @@ driving the DualSense lightbar.
 `ControllerManager` runs a monitor thread that scans `evdev.list_devices()` every two
 seconds. A device is treated as a controller when:
 
-1. its **vendor id** is known (`0x054c` → PlayStation, `0x045e` → Xbox), and
-2. it advertises a **gamepad capability** — either `BTN_GAMEPAD` or `BTN_SOUTH` (whichever the driver exposes).
+1. its **vendor id** is known (`0x054c` -> PlayStation, `0x045e` -> Xbox), and
+2. it advertises a **gamepad capability** - either `BTN_GAMEPAD` or `BTN_SOUTH` (whichever the driver exposes).
 
-Recognising by vendor plus capability — rather than a fixed product-ID list — means
+Recognising by vendor plus capability - rather than a fixed product-ID list - means
 unlisted models of a known vendor still work, and non-gamepad nodes that share a vendor id
 (headset, motion sensor, touchpad) are excluded. Product IDs are used only to choose a
 nicer display name. Software-emulated pads that advertise a real Sony/Microsoft vendor id
 (Sunshine/inputtino creates them over uhid for stream clients) are excluded by their
-synthetic `phys` / "(virtual)" name — adopting one would remap a stream client's input.
+synthetic `phys` / "(virtual)" name - adopting one would remap a stream client's input.
 
 Each detected device becomes a `ControllerInstance`, keyed by its **stable identity**
 (`uniq`, e.g. the Bluetooth MAC; else the physical attachment point `phys`, which keeps two
-identical serial-less USB pads apart; else `vendor:product`) — the same key configuration and the
+identical serial-less USB pads apart; else `vendor:product`) - the same key configuration and the
 tray label use, see [per-device identity](../decisions/per-device-identity.md). Keying on
 identity rather than the `/dev/input/eventX` path matters because a Bluetooth pad
 re-registers on a *new* evdev/hidraw node after every reconnect (e.g. when it is un/re-paired
 for console use): the reconcile pass recognises the same identity and **rebinds** the instance
-to the new node in place — restarting only the remapper — instead of tearing it down and
+to the new node in place - restarting only the remapper - instead of tearing it down and
 rebuilding it, which would churn the tray menu into stuck-disabled items. The same re-assert
 also runs when a pad returns on a *reused* `eventX` path (detected as a previously-absent
-instance reappearing, not a path change): the device underneath — and thus its remapper grab
-and lightbar — is new even though the path number is not. A pad that vanishes is dropped only
+instance reappearing, not a path change): the device underneath - and thus its remapper grab
+and lightbar - is new even though the path number is not. A pad that vanishes is dropped only
 after a short grace period, so a brief reconnect blip never removes it.
 
 ## Modes
@@ -76,7 +76,7 @@ after a short grace period, so a brief reconnect blip never removes it.
 | `ps5-xbox` | PlayStation | grab + emit a virtual Xbox 360 pad |
 | `xbox-native` | Xbox | pass-through, no grab |
 
-The modes offered per family are defined by `MODES_FOR_FAMILY`. The Xbox→PlayStation
+The modes offered per family are defined by `MODES_FOR_FAMILY`. The Xbox->PlayStation
 direction is deliberately omitted (see
 [output protocol constraints](../decisions/output-protocol-constraints.md)). A persisted
 mode that is no longer offered for a family falls back to that family's native default, so
@@ -100,7 +100,7 @@ Two details matter:
 - **The loop is interruptible.** The event loop uses `selectors` over the source fd plus a
   self-pipe. `stop()` writes to the pipe, waking the loop immediately even when the
   controller is idle. This replaced an earlier design that closed the source fd from
-  another thread — see [the remapping engine decision](../decisions/remapping-engine.md)
+  another thread - see [the remapping engine decision](../decisions/remapping-engine.md)
   for why that leaked.
 
 The virtual device is created before the grab is attempted; if the grab fails, the virtual
@@ -111,7 +111,7 @@ device is closed so it cannot linger. Virtual devices are excluded from the dete
 
 An `evdev` grab hides a device only on the evdev layer. Some applications read controllers
 straight from `/dev/hidraw*`, bypassing the grab, which causes double input in a remapped
-mode — and a `chmod` alone cannot stop a process that opened the node *before* the gate
+mode - and a `chmod` alone cannot stop a process that opened the node *before* the gate
 (Steam Input opens every pad on connect and keeps the fd). The gate is therefore keyed by
 the pad's **stable identity** and works in three parts: a marker file records the gate
 state, a driver **rebind** revokes every existing fd (and resets the DualSense lightbar
@@ -124,8 +124,8 @@ rationale and the rule-ordering pitfalls: [the hidraw gate](../decisions/hidraw-
 ## The lightbar (DualSense)
 
 A DualSense mode is signalled on the controller's lightbar: blue for `ps5-native`, green
-for `ps5-xbox`. The colour is driven through the kernel **LED class** — the
-hid-playstation `…:rgb:indicator` multicolor node, written by the `controller-led` helper —
+for `ps5-xbox`. The colour is driven through the kernel **LED class** - the
+hid-playstation `...:rgb:indicator` multicolor node, written by the `controller-led` helper -
 not via raw hidraw output reports, which race the driver and get dropped over Bluetooth
 (leaving the lightbar on its firmware default). The kernel does the USB/BT report framing,
 so the colour is reliable.
@@ -134,39 +134,39 @@ The lightbar is fragile across reconnects for two reasons, and the daemon defend
 both:
 
 - **The LED node renumbers.** Its name derives from the `inputN` instance counter, which
-  bumps on *every* reconnect (`input38` → `input47` → …) — even when the `/dev/input/eventX`
+  bumps on *every* reconnect (`input38` -> `input47` -> ...) - even when the `/dev/input/eventX`
   path is reused, so a path-keyed check would miss it. `_apply_led()` therefore never trusts
   a cached node name: it re-resolves the `:rgb:indicator` node from the live evdev path on
   every write, so a colour can never land on a stale, now-dead node.
   `ControllerInstance.refresh_led()` (run each monitor tick, outside the reconcile lock
   because the write may shell out to `sudo`) repaints when the live node differs from the one
-  last painted — covering a renumber that happens without a polled absence.
+  last painted - covering a renumber that happens without a polled absence.
 - **The firmware resets the lightbar on power-cycle.** A pad toggled off/on returns on its
   firmware-default blue and un-remapped (its old grab died with the disconnect). Because the
   evdev path is often reused, the daemon detects such a reconnect by a *presence transition*
   (a previously absent instance reappearing) rather than a path change, and re-asserts the
-  whole mode — restarting the remapper, re-gating the hidraw node and repainting the lightbar.
+  whole mode - restarting the remapper, re-gating the hidraw node and repainting the lightbar.
 
 In `ps5-native` the lightbar has a second legitimate writer: applications with raw HID
 access (games with native DualSense support; and the Steam client itself, which with the
 required "Enabled in Games w/o Support" setting holds every pad permanently). Because that
 permanent hold no longer separates an idle desktop from a running game, the daemon
-*classifies* game-vs-idle rather than merely counting holders — while a
+*classifies* game-vs-idle rather than merely counting holders - while a
 game holds the pad the lightbar is its; when the last holder exits, the daemon rearms the
-pad (driver rebind — a raw writer may have firmware-latched the lightbar dark) and
+pad (driver rebind - a raw writer may have firmware-latched the lightbar dark) and
 repaints the resting blue; a reopen shortly after one of our own rebinds (Steam writes its
 defaults once and goes quiet) is outlasted by a delayed repaint. In the remap mode none of
-this is needed — the gate guarantees exclusive LED ownership, so green simply holds. Full
+this is needed - the gate guarantees exclusive LED ownership, so green simply holds. Full
 policy: [Steam coexistence](../decisions/steam-coexistence.md).
 
 ## The tray
 
 The tray is a `StatusNotifierItem` served directly over D-Bus, with its menu provided by a
-`com.canonical.dbusmenu` object — no GUI toolkit is linked. The item is registered with
+`com.canonical.dbusmenu` object - no GUI toolkit is linked. The item is registered with
 the `StatusNotifierWatcher` using its **object path**. The menu model is built once per
 state change and cached; structural changes (hotplug) allocate **fresh, never-recycled
 item ids**, while display-only changes (the radio checkmark) keep their ids and are pushed
-as `ItemsPropertiesUpdated` deltas — hosts that cache item properties per id (GNOME's
+as `ItemsPropertiesUpdated` deltas - hosts that cache item properties per id (GNOME's
 appindicator extension) would otherwise keep stale properties for a reused id and render
 entries stuck disabled. Each connected controller becomes a section of radio items;
 selecting one calls back into `ControllerManager.set_mode()` via the cached id lookup.
@@ -178,6 +178,6 @@ Full rationale: [dbusmenu item model](../decisions/tray-menu-model.md).
   ones; stopping always restores the hidraw node so a gate never lingers after a
   disconnect.
 - **Persistence:** `set_mode()` writes the chosen mode to `controller-modes.json`, keyed
-  by the device's stable identity (`uniq`, else `phys:…`).
+  by the device's stable identity (`uniq`, else `phys:...`).
 - **Shutdown:** on `SIGTERM`/`SIGINT` the daemon stops every instance, releasing grabs and
   restoring all gated nodes.

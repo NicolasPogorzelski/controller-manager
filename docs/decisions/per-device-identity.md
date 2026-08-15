@@ -3,20 +3,20 @@
 ## Context
 
 Two identical controllers (same vendor and product id) must be configurable
-independently — for example, one native and one remapped at the same time. A product-ID
+independently - for example, one native and one remapped at the same time. A product-ID
 key cannot tell them apart, and the `/dev/input/eventX` path is not stable across
 reconnects, so it cannot key persisted configuration.
 
 ## Decision
 
-Identify each controller by a **stable per-device id** — the evdev `uniq` value (the
+Identify each controller by a **stable per-device id** - the evdev `uniq` value (the
 Bluetooth MAC / serial) when the pad reports one, else its physical attachment point
-(`phys:…`), else `vendor:product` as a last resort. This is what `ident_of()` computes.
+(`phys:...`), else `vendor:product` as a last resort. This is what `ident_of()` computes.
 
 - **Configuration** in `controller-modes.json` is keyed by this identity.
 - The **tray label** is disambiguated by the pad's daemon-assigned **player number** (the
   same one shown on the DualSense white player LEDs), so two identical controllers are
-  distinguishable in the menu and menu and hardware always agree — see
+  distinguishable in the menu and menu and hardware always agree - see
   [player-leds](player-leds.md).
 - The runtime device map is still keyed by the current `eventX` path (it must be, for
   hotplug), but the *identity* that survives reconnects and that the user configures is the
@@ -31,8 +31,8 @@ them into one.
 - Two identical controllers keep separate, persistent modes.
 - A controller keeps its mode across reconnects and across `eventX` renumbering.
 - Because the [hidraw gate](hidraw-gate.md) is also keyed by the pad's stable identity
-  (its `HID_UNIQ` marker), the whole pipeline — detection, configuration, remapping, and
-  gating — is independent per physical device.
+  (its `HID_UNIQ` marker), the whole pipeline - detection, configuration, remapping, and
+  gating - is independent per physical device.
 
 ## Migration note
 

@@ -64,11 +64,11 @@ Do not include AI/assistant attribution trailers in commit messages.
 ## Documentation
 
 - Architecture and rationale go under `docs/`. Significant design choices are recorded as
-  short decision documents in `docs/decisions/` (context → decision → consequences).
+  short decision documents in `docs/decisions/` (context -> decision -> consequences).
 - Operational procedures go under `runbooks/`. Every runbook follows the contract in
   [runbooks/README.md](runbooks/README.md): **Preconditions, Steps, Verification, Failure
   modes**, and **Rollback** where applicable.
-- Keep everything generic and reusable — no machine-specific paths or personal
+- Keep everything generic and reusable - no machine-specific paths or personal
   environment details.
 
 ## Before opening a pull request

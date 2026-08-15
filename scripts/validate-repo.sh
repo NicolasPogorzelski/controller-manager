@@ -99,11 +99,11 @@ if command -v shellcheck &>/dev/null; then
         fi
     done
 else
-    echo "  (shellcheck not found — skipped; CI enforces it)"
+    echo "  (shellcheck not found - skipped; CI enforces it)"
 fi
 
 # =============================================================================
-# Check 7: unit tests (reconcile logic, dbusmenu id model, …)
+# Check 7: unit tests (reconcile logic, dbusmenu id model, ...)
 # =============================================================================
 echo "Check 7: unit tests"
 

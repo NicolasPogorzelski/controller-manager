@@ -30,7 +30,7 @@ sudo visudo -c
 
 ```bash
 # Service is running after the update
-systemctl --user is-active controller-manager.service   # → active
+systemctl --user is-active controller-manager.service   # -> active
 
 # Persisted modes are intact
 cat ~/.config/controller-modes.json
@@ -42,8 +42,8 @@ The tray icon should reappear and list connected controllers with their previous
 
 | Symptom | Check |
 |---|---|
-| Service is `failed` after update | `journalctl --user -u controller-manager.service -n 30` — usually a new Python dependency that is not installed |
-| Persisted mode no longer appears in tray | The mode was removed in this version; the daemon falls back to native — expected behaviour |
+| Service is `failed` after update | `journalctl --user -u controller-manager.service -n 30` - usually a new Python dependency that is not installed |
+| Persisted mode no longer appears in tray | The mode was removed in this version; the daemon falls back to native - expected behaviour |
 | `sudo` prompt during install despite sudoers rule being present | The sudoers rule template changed; re-running `./install.sh` re-renders and re-installs it |
 
 ## Rollback

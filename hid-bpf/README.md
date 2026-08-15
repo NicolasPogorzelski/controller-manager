@@ -1,4 +1,4 @@
-# hid-bpf — kernel-side report-descriptor fixups
+# hid-bpf - kernel-side report-descriptor fixups
 
 This directory holds HID-BPF programs that patch a controller's HID report descriptor in
 the kernel before it is parsed. They exist to make otherwise-unusable pads work; the
@@ -6,13 +6,13 @@ userspace daemon (`../controller-manager.py`) needs no knowledge of them.
 
 ## Contents
 
-- `0010-Microsoft__Xbox-One-S-02FD.bpf.c` — appends the two missing `END_COLLECTION` bytes
+- `0010-Microsoft__Xbox-One-S-02FD.bpf.c` - appends the two missing `END_COLLECTION` bytes
   to the truncated HID descriptor of the Bluetooth Xbox pad reporting product `0x02FD`,
   which otherwise fails to parse and produces no input device at all. Full rationale in
   [../docs/decisions/xbox-02fd-hid-bpf.md](../docs/decisions/xbox-02fd-hid-bpf.md).
-- `include/` — the minimal vendored HID-BPF headers (`hid_bpf.h`, `hid_bpf_helpers.h`) the
+- `include/` - the minimal vendored HID-BPF headers (`hid_bpf.h`, `hid_bpf_helpers.h`) the
   program includes, copied verbatim from upstream `udev-hid-bpf`.
-- `build.sh` — builds the program(s) against the running kernel's BTF into `build/`
+- `build.sh` - builds the program(s) against the running kernel's BTF into `build/`
   (git-ignored). `vmlinux.h` is generated at build time, not committed.
 
 ## Requirements

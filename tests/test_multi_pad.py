@@ -1,8 +1,8 @@
-"""Regression test for the multi-controller path: four pads (2× DualSense +
-2× Xbox) must be tracked as independent instances — per-pad mode, per-pad
+"""Regression test for the multi-controller path: four pads (2x DualSense +
+2x Xbox) must be tracked as independent instances - per-pad mode, per-pad
 reconnect handling, per-pad tray-menu routing, and 'DualSense 1 / 2' numbering
 for identical models. Also guards the scan filter: our own virtual output pads
-are recognised by python-evdev's uinput phys marker, NOT by name — a real
+are recognised by python-evdev's uinput phys marker, NOT by name - a real
 wired Xbox 360 pad is named exactly like VIRTUAL_XBOX by xpad and must still
 be adopted.
 
@@ -19,7 +19,7 @@ try:
     cm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
-    print(f"SKIP: runtime dependency missing ({ex.name}) — needs evdev/dbus/gi")
+    print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
     sys.exit(0)
 
 # Never touch the user's real controller-modes.json. config_store feeds what
@@ -173,7 +173,7 @@ check(insts["AA:AA"].player == 1 and insts["BB:BB"].player == 2,
       "numbers follow the persisted identity, not today's adoption order")
 config_store[0] = {}
 
-# ── Scenario E: menu numbering — duplicates numbered, unique names plain ────
+# ── Scenario E: menu numbering - duplicates numbered, unique names plain ────
 print("Scenario E: 'DualSense 1 / 2' numbering for identical models only")
 class Pad:
     def __init__(self, ident, name, family="ps5", mode="ps5-native", player=None):
@@ -229,13 +229,13 @@ labels = [str(p["label"]) for _, p in menu._items if "label" in p]
 check("DualSense 1" in labels and "DualSense 2" in labels,
       "menu shows the numbered headers")
 # A single-choice family shows its one mode as a static, disabled line rather
-# than a lone always-checked radio — one per Xbox pad.
+# than a lone always-checked radio - one per Xbox pad.
 disabled = [str(p["label"]) for _, p in menu._items
             if "label" in p and not p.get("enabled", True)]
 check(disabled.count(cm.MODE_LABELS["xbox-native"]) == 2,
       "each single-mode Xbox pad shows its mode as a non-interactive line")
 
-# ── Scenario G: scan filter — phys marker excludes ours, real X360 adopted ──
+# ── Scenario G: scan filter - phys marker excludes ours, real X360 adopted ──
 print("Scenario G: virtual pads excluded by uinput phys; real X360 pad adopted")
 class Info:
     def __init__(self, vendor, product):

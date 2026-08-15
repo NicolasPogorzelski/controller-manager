@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# controller-hidraw-gate — hide a game controller's raw HID path from
+# controller-hidraw-gate - hide a game controller's raw HID path from
 # applications while controller-manager remaps it to a virtual pad.
 #
 # v2: gating is keyed by the pad's stable HID identity (HID_UNIQ: BT MAC /
 # serial) instead of a volatile /dev/hidrawN node, and it actually revokes
 # access. chmod alone cannot: a process that opened the node BEFORE the gate
 # (Steam Input grabs every pad the moment it connects) keeps a working fd and
-# continues to read input and write output reports — double input, and the
+# continues to read input and write output reports - double input, and the
 # DualSense lightbar firmware-latched dark. Therefore:
 #
 #   * gate state = marker file /run/controller-manager/gated/<uniq>
 #     (tmpfs: clears itself on reboot, so a stale gate can never survive)
 #   * a udev rule (72-controller-manager.rules) checks the marker via
 #     `udev-check` and makes gated hidraw nodes be BORN with MODE 0000 and
-#     without the uaccess tag — nothing to race
+#     without the uaccess tag - nothing to race
 #   * block/restore rebind the HID driver, which destroys every open fd on
 #     the old nodes and re-probes the pad (resetting the DualSense lightbar
 #     "light out" latch a previous hidraw writer may have set)
@@ -26,12 +26,12 @@
 #                                                # for pads without a HID_UNIQ
 #
 # block/restore/rearm rebind only on a real state transition, never on a
-# repeated call — controller-manager re-asserts the gate after the rebind's
+# repeated call - controller-manager re-asserts the gate after the rebind's
 # own device churn, and a rebind on every re-assert would loop forever.
 #
 # Safety: only HID devices of known controller vendors are ever touched, so
 # this can't be aimed at unrelated HID hardware (keyboards, fingerprint
-# readers, …). Meant to be invoked through a tightly-scoped NOPASSWD sudoers
+# readers, ...). Meant to be invoked through a tightly-scoped NOPASSWD sudoers
 # rule; udev-check is called directly by udevd (already root).
 
 set -euo pipefail
@@ -56,12 +56,12 @@ vendor_of() {
 vendor_ok() {
   local vid; vid="$(vendor_of "$1")"
   local v; for v in "${GAMING_VENDORS[@]}"; do [[ "$v" == "$vid" ]] && return 0; done
-  echo "vendor '$vid' of $1 not a gaming vendor — refused" >&2
+  echo "vendor '$vid' of $1 not a gaming vendor - refused" >&2
   return 1
 }
 
 # Locate the sysfs HID device whose HID_UNIQ matches; empty result if absent
-# (a disconnected pad is a legal target for restore — the marker still counts).
+# (a disconnected pad is a legal target for restore - the marker still counts).
 find_hid_by_uniq() {
   local dev
   for dev in /sys/bus/hid/devices/*; do
@@ -86,7 +86,7 @@ chmod_nodes() {
 
 # Detach + reattach the kernel driver: every open fd on the device's hidraw
 # and event nodes dies, the driver re-probes (fresh DualSense lightbar setup),
-# and the nodes reappear renumbered — born gated or not per the udev rule.
+# and the nodes reappear renumbered - born gated or not per the udev rule.
 rebind() {
   local dev="$1" name drv
   name="$(basename "$dev")"
@@ -122,7 +122,7 @@ case "$action" in
       # Belt & braces for the REBORN nodes: the udev rule should deliver them
       # at MODE 0000 already, but if a rule-ordering regression ever leaks a
       # uaccess ACL again, a hard chmod also zeroes the ACL mask.
-      for _ in $(seq 1 15); do            # re-probe takes a moment; ≤1.5 s
+      for _ in $(seq 1 15); do            # re-probe takes a moment; <=1.5 s
         compgen -G "$dev/hidraw/hidraw*" >/dev/null && break
         sleep 0.1
       done
@@ -171,7 +171,7 @@ case "$action" in
 
   block-node|restore-node)
     # v1 semantics for pads that expose no HID_UNIQ: chmod one specific node.
-    # Cannot revoke already-open fds — best effort only.
+    # Cannot revoke already-open fds - best effort only.
     node="$arg"
     [[ "$node" =~ ^/dev/hidraw[0-9]+$ ]] || die "bad node '$node'"
     [[ -e "$node" ]] || { echo "$node absent, nothing to do"; exit 0; }

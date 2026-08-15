@@ -27,11 +27,11 @@
  * via the Xbox Accessories app (Windows) or an Xbox console. This fixup makes
  * the pad usable on Linux without that. It is bound tightly to the exact
  * broken descriptor (size == 306 and the specific truncated tail), so a pad on
- * fixed firmware — which advertises a different descriptor — is left alone.
+ * fixed firmware - which advertises a different descriptor - is left alone.
  *
  * A note on the product ids we match. The pad reports product 0x02FD, but
  * xpadneo rewrites it to 0x028E ("pretending XB1S Windows wireless mode")
- * during its probe — and that probe runs and rewrites the id BEFORE this
+ * during its probe - and that probe runs and rewrites the id BEFORE this
  * program is attached, whether or not it ultimately fails. So by the time the
  * udev rule fires and HID-BPF matches the device, the product is already
  * 0x028E. We list both: 0x028E is what actually matches when xpadneo is

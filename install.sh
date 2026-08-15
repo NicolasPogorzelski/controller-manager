@@ -10,7 +10,7 @@ echo "==> User-space (controller-manager + service)"
 install -D -m 0755 controller-manager.py       "$HOME/.local/bin/controller-manager.py"
 install -D -m 0644 controller-manager.service  "$HOME/.config/systemd/user/controller-manager.service"
 
-echo "==> Root-space (hidraw gate + led helper + udev rule + sudoers) — sudo required"
+echo "==> Root-space (hidraw gate + led helper + udev rule + sudoers) - sudo required"
 sudo install -m 0755 -o root -g root controller-hidraw-gate /usr/local/bin/controller-hidraw-gate
 sudo install -m 0755 -o root -g root controller-led         /usr/local/bin/controller-led
 
@@ -24,7 +24,7 @@ sudo install -m 0644 -o root -g root 72-controller-manager.rules /etc/udev/rules
 sudo rm -f /etc/udev/rules.d/71-controller-manager.rules
 sudo udevadm control --reload
 # Replay hidraw events so the new rule is evaluated for already-connected pads
-# too (no markers exist yet, so nodes simply stay open — this only makes the
+# too (no markers exist yet, so nodes simply stay open - this only makes the
 # rule effective now instead of at the next reconnect).
 sudo udevadm trigger --subsystem-match=hidraw
 
@@ -36,11 +36,11 @@ sudo udevadm trigger --subsystem-match=hidraw
 #
 # This needs a build toolchain (clang/bpftool/libbpf-devel), udev-hid-bpf, and a
 # BTF-enabled kernel. It only matters if you own that specific pad, so a missing
-# prerequisite is a skip-with-warning, not a failure — DualSense-only setups are
+# prerequisite is a skip-with-warning, not a failure - DualSense-only setups are
 # unaffected.
 if command -v udev-hid-bpf >/dev/null 2>&1; then
     if bpf_o="$(./hid-bpf/build.sh)"; then
-        echo "==> HID-BPF (Xbox 02FD descriptor fixup) — sudo required"
+        echo "==> HID-BPF (Xbox 02FD descriptor fixup) - sudo required"
         sudo udev-hid-bpf install --force "hid-bpf/$bpf_o"
         # Attach to an already-connected 02FD pad without a reconnect (the udev
         # rule otherwise only fires on the next add event).
@@ -51,7 +51,7 @@ if command -v udev-hid-bpf >/dev/null 2>&1; then
         echo "      see hid-bpf/build.sh output above). Only affects the 0x02FD pad." >&2
     fi
 else
-    echo "note: udev-hid-bpf not installed — skipping Xbox 02FD HID-BPF fixup." >&2
+    echo "note: udev-hid-bpf not installed - skipping Xbox 02FD HID-BPF fixup." >&2
     echo "      Fedora: sudo dnf install udev-hid-bpf clang bpftool libbpf-devel" >&2
 fi
 

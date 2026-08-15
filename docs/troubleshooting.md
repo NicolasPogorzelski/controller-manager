@@ -31,7 +31,7 @@ re-log in.
 
 ## Double input / wrong glyphs in a remapped mode
 
-The physical controller is still reaching the application through its raw HID node — the
+The physical controller is still reaching the application through its raw HID node - the
 [hidraw gate](decisions/hidraw-gate.md) is not in effect. Check:
 
 1. **Is the gate helper installed?** Without it, gating is a silent no-op.
@@ -41,7 +41,7 @@ The physical controller is still reaching the application through its raw HID no
    ```
 
 2. **Is the udev rule installed and udev reloaded?** Since gate v2, pre-existing fds are
-   revoked by a driver rebind and new nodes are born gated — but only with
+   revoked by a driver rebind and new nodes are born gated - but only with
    `/etc/udev/rules.d/72-controller-manager.rules` in place:
 
    ```bash
@@ -52,8 +52,8 @@ Confirm the gate state directly (replace the node with your controller's, see th
 [verification runbook](../runbooks/verify-remapping.md)):
 
 ```bash
-ls -l /dev/hidrawN     # remapped → c--------- (000, no trailing '+')
-                       # native   → crw-rw----+ / crw-rw-rw-+ (open, seat ACL)
+ls -l /dev/hidrawN     # remapped -> c--------- (000, no trailing '+')
+                       # native   -> crw-rw----+ / crw-rw-rw-+ (open, seat ACL)
 ```
 
 The exact open permissions of a native node come from the distribution's controller udev
@@ -62,19 +62,19 @@ matters is gated = `000` with no ACL vs. native = readable with the seat ACL.
 
 ## A fifth (phantom) controller appears when two DualSense are both emulated
 
-Symptom: with two DualSense both in `ps5-xbox`, Steam's *Settings → Controller* lists
-**five** controllers — the two native Xbox pads, the two emulated virtual Xbox pads, and
+Symptom: with two DualSense both in `ps5-xbox`, Steam's *Settings -> Controller* lists
+**five** controllers - the two native Xbox pads, the two emulated virtual Xbox pads, and
 one extra **PlayStation** pad. It appears only once the *second* pad is emulated (one
 emulated = four, clean) and is always the second, whichever physical pad that is.
 
 This is a **known, inert limitation**, not a gate failure. The hidraw gate holds on both
 pads; the phantom is the second pad's **evdev** node, which Steam re-opens and lists during
 the driver rebind of the second `ps5-xbox` transition. The remapper's `EVIOCGRAB` still
-holds it, so the phantom produces **no input** (no double input) — it is a dead list entry.
+holds it, so the phantom produces **no input** (no double input) - it is a dead list entry.
 Full analysis and why there is no lightweight fix:
 [the evdev enumeration leak](decisions/evdev-enumeration-leak.md).
 
-Confirm it is the harmless case — both hidraw nodes gated, the phantom grabbed and inert:
+Confirm it is the harmless case - both hidraw nodes gated, the phantom grabbed and inert:
 
 ```bash
 # both physical DualSense hidraw nodes must be 000 (gate holds on both):
@@ -83,21 +83,21 @@ for d in /sys/bus/hid/devices/*:054C:*; do
   for h in "$d"/hidraw/hidraw*; do ls -l "/dev/$(basename "$h")"; done
 done
 
-# the phantom's evdev node is grabbed → no events leak to Steam:
+# the phantom's evdev node is grabbed -> no events leak to Steam:
 evtest /dev/input/eventN   # prints "This device is grabbed by another process"
 ```
 
 If instead the phantom *reacts* to input in a game (double input) or steals a player slot,
-that is the functional case the decision doc gates its fix on — worth reporting.
+that is the functional case the decision doc gates its fix on - worth reporting.
 
 ## The DualSense lightbar shows the wrong colour after a reconnect
 
 Symptom: the pad is correctly remapped (e.g. output as Xbox, raw HID gated) but the lightbar
-stays **blue** (the firmware default) instead of the mode colour — most visibly after
+stays **blue** (the firmware default) instead of the mode colour - most visibly after
 toggling the controller off/on several times. The mode itself is fine; only the colour cue
 is stale, which can make a mode switch *look* like it did nothing.
 
-Cause: on a reconnect the hid-playstation `…:rgb:indicator` LED node is renumbered (its name
+Cause: on a reconnect the hid-playstation `...:rgb:indicator` LED node is renumbered (its name
 follows the `inputN` counter, which bumps even when the `/dev/input/eventX` path is reused),
 and the controller firmware resets the lightbar to its default on power-cycle. The daemon
 re-resolves the live node and re-asserts the mode colour on the next monitor tick, so it
@@ -112,20 +112,20 @@ done
 ```
 
 If `multi_intensity` already matches the mode but the **hardware** lightbar does not
-(typically completely dark), a raw-HID writer — Steam Input is the usual one — has set the
+(typically completely dark), a raw-HID writer - Steam Input is the usual one - has set the
 pad's lightbar-setup "light out" flag: the firmware then ignores plain colour writes until
 the driver re-probes. Check who holds the pad's hidraw node and see
 [Steam coexistence](decisions/steam-coexistence.md) for the required Steam setup; the
 daemon rearms the pad automatically (driver rebind) once the last holder exits, which
 clears the latch. If the LED value itself is wrong, check that `controller-led` is installed and
-authorised (`/etc/sudoers.d/controller-hidraw`) — without it the colour write is a silent
+authorised (`/etc/sudoers.d/controller-hidraw`) - without it the colour write is a silent
 no-op.
 
 ## A remapped controller has working sticks but dead buttons
 
-This is the Xbox→PlayStation direction, which is intentionally **not offered** for exactly
-this reason — see [output protocol constraints](decisions/output-protocol-constraints.md).
-The supported directions are PlayStation→Xbox and the two native modes.
+This is the Xbox->PlayStation direction, which is intentionally **not offered** for exactly
+this reason - see [output protocol constraints](decisions/output-protocol-constraints.md).
+The supported directions are PlayStation->Xbox and the two native modes.
 
 ## A Bluetooth controller is paired and connected but never appears in the tray
 
@@ -147,7 +147,7 @@ sudo dmesg | grep -i 'unbalanced collection'
 ```
 
 For the specific Bluetooth Xbox pad reporting product `0x02FD` this is a firmware bug fixed
-by the bundled HID-BPF descriptor fixup — make sure it installed (`install.sh` skips it with
+by the bundled HID-BPF descriptor fixup - make sure it installed (`install.sh` skips it with
 a warning if the build toolchain is missing):
 
 ```bash
@@ -173,7 +173,7 @@ control of the physical devices.
 ## An orphaned virtual controller lingers
 
 A correctly running daemon removes its virtual device as soon as a controller returns to
-native mode. If you find a stale virtual pad, restart the service — it clears any leftover
+native mode. If you find a stale virtual pad, restart the service - it clears any leftover
 state:
 
 ```bash

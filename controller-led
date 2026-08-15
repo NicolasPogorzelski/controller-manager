@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# controller-led — DualSense LED helper for the controller-manager daemon.
+# controller-led - DualSense LED helper for the controller-manager daemon.
 #
 #   controller-led lightbar-raw <hidrawN> <r> <g> <b>  # lightbar via raw HID
 #   controller-led <ledname> <r> <g> <b>               # lightbar via LED class
@@ -8,14 +8,14 @@
 # The lightbar is driven with a RAW HID output report (lightbar-raw). Unlike a
 # kernel LED-class write, a raw colour report also clears the DualSense firmware
 # "light out" latch, so the colour reaches the hardware even after a raw-HID
-# consumer (Steam Input) has latched the pad dark — the LED-class write updates
+# consumer (Steam Input) has latched the pad dark - the LED-class write updates
 # the sysfs node but leaves such a latched lightbar physically off. The old
 # LED-class path (<ledname>) is kept for reference/compat. The white player LEDs
 # go through the LED class, which drives them reliably.
 #
 # Safety: only a *:rgb:indicator / *:white:player-N LED or a /dev/hidrawN node
 # that belongs to a Sony (054C) HID device is ever written, so this can't be
-# aimed at unrelated LEDs/devices (keyboard, NIC, …). Meant to be invoked
+# aimed at unrelated LEDs/devices (keyboard, NIC, ...). Meant to be invoked
 # through a tightly-scoped NOPASSWD sudoers rule.
 
 set -euo pipefail
@@ -26,7 +26,7 @@ sony_ok() {
   [[ -r "$ue" ]] || { echo "cannot read $ue" >&2; return 1; }
   local vid
   vid="$(sed -n 's/^HID_ID=[0-9A-Fa-f]*:0*\([0-9A-Fa-f]\{4\}\):.*/\1/p' "$ue" | tr 'a-f' 'A-F')"
-  [[ "$vid" == "054C" ]] || { echo "vendor '$vid' not Sony — refused" >&2; return 1; }
+  [[ "$vid" == "054C" ]] || { echo "vendor '$vid' not Sony - refused" >&2; return 1; }
 }
 
 if [[ "${1:-}" == "player" ]]; then
@@ -55,14 +55,14 @@ if [[ "${1:-}" == "lightbar-raw" ]]; then
   node="${2:-}"; r="${3:-}"; g="${4:-}"; b="${5:-}"
   # A plain /dev/hidrawN node (no path traversal, no other class).
   [[ "$node" =~ ^/dev/hidraw[0-9]+$ ]] || { echo "bad hidraw '$node'" >&2; exit 2; }
-  # Node already gone (controller disconnected mid-write) — nothing to do.
+  # Node already gone (controller disconnected mid-write) - nothing to do.
   [[ -e "$node" ]] || { echo "$node absent, nothing to do"; exit 0; }
   for v in "$r" "$g" "$b"; do
     { [[ "$v" =~ ^[0-9]+$ ]] && (( v <= 255 )); } || { echo "bad channel '$v'" >&2; exit 2; }
   done
   ue="/sys/class/hidraw/$(basename "$node")/device/uevent"
   sony_ok "$ue" || exit 3
-  # Bus from HID_ID=BUS:0000VVVV:0000PPPP — 0005 Bluetooth (report 0x31 + CRC),
+  # Bus from HID_ID=BUS:0000VVVV:0000PPPP - 0005 Bluetooth (report 0x31 + CRC),
   # 0003 USB (report 0x02, no CRC): the two wire formats differ.
   bus="$(sed -n 's/^HID_ID=\([0-9A-Fa-f]*\):.*/\1/p' "$ue")"
   if python3 - "$node" "$bus" "$r" "$g" "$b" <<'PY'
@@ -105,11 +105,11 @@ fi
 
 led="${1:-}"; r="${2:-}"; g="${3:-}"; b="${4:-}"
 
-# Name only (never a path) — refuse anything but a plain rgb-indicator led name.
+# Name only (never a path) - refuse anything but a plain rgb-indicator led name.
 [[ "$led" =~ ^[A-Za-z0-9_.:-]+:rgb:indicator$ ]] || { echo "bad led '$led'" >&2; exit 2; }
 
 dir="/sys/class/leds/$led"
-# Node already gone (e.g. controller disconnected mid-write) — nothing to do.
+# Node already gone (e.g. controller disconnected mid-write) - nothing to do.
 [[ -d "$dir" ]] || { echo "$dir absent, nothing to do"; exit 0; }
 
 # Channels must be integers 0-255.

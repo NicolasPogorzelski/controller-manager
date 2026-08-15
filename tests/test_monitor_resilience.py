@@ -1,8 +1,8 @@
 """Regression test for the daemon-freeze class (field bug, 2026-07-15): during
 a disconnect/reconnect of all pads, _refresh_nodes dropped a pad's path to None
 and the resting-colour watch then called hidraw_for_event(None), which raised
-TypeError('expected str … not NoneType'). _monitor had no guard around _poll,
-so that one exception killed the monitor thread for good — hotplug, removal and
+TypeError('expected str ... not NoneType'). _monitor had no guard around _poll,
+so that one exception killed the monitor thread for good - hotplug, removal and
 LED updates all stopped silently while the D-Bus main loop kept answering menu
 clicks (modes still switched, nothing else ever updated).
 
@@ -25,7 +25,7 @@ try:
     cm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
-    print(f"SKIP: runtime dependency missing ({ex.name}) — needs evdev/dbus/gi")
+    print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
     sys.exit(0)
 
 fails = []
