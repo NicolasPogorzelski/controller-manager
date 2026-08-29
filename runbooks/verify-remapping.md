@@ -94,6 +94,12 @@ for ev in d.read_loop():
     if time.time()>end: break"
 ```
 
+**Analog regression check** - in a game with analog acceleration, hold R2 halfway, turn the
+left stick, then release only the stick. Steering must return to center within one frame at
+60 Hz while the half-held trigger remains active. Repeat with L2 and with both triggers at
+their endpoints. Continued steering after release indicates that raw trigger reports are
+again bypassing analog coalescing.
+
 ## Failure modes
 
 | Observation | Likely cause |

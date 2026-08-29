@@ -41,6 +41,8 @@ This repository is a self-contained tool and a worked example of a Linux input p
   [Steam coexistence](docs/decisions/steam-coexistence.md)).
 - **Hotplug aware** - controllers may be connected and disconnected at any time; the tray
   menu updates automatically.
+- **Stable DualSense analog translation** - signed Xbox stick ranges, center snapping, and
+  bounded 60 Hz analog reports prevent Bluetooth input backlogs.
 - **No daemon dependencies beyond the standard desktop stack** - `python-evdev`,
   `dbus-python`, and `PyGObject`.
 

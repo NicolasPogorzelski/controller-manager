@@ -132,6 +132,26 @@ TARGET_BUTTON_MAP = {
     },
 }
 
+STICK_AXES = {e.ABS_X, e.ABS_Y, e.ABS_RX, e.ABS_RY}
+# Half-held triggers jitter continuously just like sticks; emitting each sample
+# defeats stick coalescing and recreates a downstream input backlog.
+TRIGGER_AXES = {e.ABS_Z, e.ABS_RZ}
+COALESCED_AXES = STICK_AXES | TRIGGER_AXES
+ANALOG_REPORT_INTERVAL = 1 / 60
+XBOX_STICK_INFO = evdev.AbsInfo(
+    value=0, min=-32768, max=32767, fuzz=16, flat=4096, resolution=0)
+
+def xbox_stick_value(value):
+    """Map a DualSense 0..255 stick to signed Xbox range with a small
+    center deadzone. Bluetooth reports jitter around 127/128 continuously;
+    snapping that region to zero prevents movement after stick release."""
+    low, high = 120, 135
+    if low <= value <= high:
+        return 0
+    if value < low:
+        return round((value - low) * 32768 / low)
+    return round((value - high) * 32767 / (255 - high))
+
 def compose_button_maps(quirk, target):
     """Chain quirk (source code -> standard code) and target (standard code ->
     code under the target identity) into the single dict the Remapper applies
@@ -480,6 +500,12 @@ class Remapper(threading.Thread):
             caps.pop(e.EV_SYN, None)
             caps.pop(e.EV_FF,  None)
 
+            if self._target["name"] == VIRTUAL_XBOX["name"]:
+                caps[e.EV_ABS] = [
+                    (item[0], XBOX_STICK_INFO) if item[0] in STICK_AXES else item
+                    for item in caps.get(e.EV_ABS, [])
+                ]
+
             # Advertise the translated (standard) key codes, else SDL maps the
             # target identity against the source's non-standard codes.
             if self._button_map and e.EV_KEY in caps:
@@ -507,19 +533,68 @@ class Remapper(threading.Thread):
             sel = selectors.DefaultSelector()
             sel.register(src.fileno(), selectors.EVENT_READ)
             sel.register(self._wake_r,  selectors.EVENT_READ)
+            pending_axes = {}
+            frame_axes = {}
+            frame_has_output = False
+            frame_open = False
+            last_analog_report = 0.0
+
+            def flush_axes():
+                nonlocal last_analog_report
+                for code, value in pending_axes.items():
+                    ui.write(e.EV_ABS, code, value)
+                pending_axes.clear()
+                ui.syn()
+                last_analog_report = time.monotonic()
+
             try:
                 while not self._stop_event.is_set():
-                    for key, _ in sel.select():
+                    timeout = None
+                    if pending_axes and not frame_open:
+                        timeout = max(
+                            0, last_analog_report + ANALOG_REPORT_INTERVAL
+                            - time.monotonic())
+
+                    ready = sel.select(timeout)
+                    if not ready:
+                        flush_axes()
+                        continue
+
+                    for key, _ in ready:
                         if key.fd == self._wake_r:        # stop() signalled
                             self._stop_event.set()
                             break
                         for event in src.read():          # all currently queued events
-                            if event.type in (e.EV_KEY, e.EV_ABS, e.EV_REL):
+                            if event.type == e.EV_SYN:
+                                if event.code == e.SYN_REPORT:
+                                    pending_axes.update(frame_axes)
+                                    frame_axes.clear()
+                                    if frame_has_output:
+                                        for code, value in pending_axes.items():
+                                            ui.write(e.EV_ABS, code, value)
+                                        pending_axes.clear()
+                                        ui.syn()
+                                        last_analog_report = time.monotonic()
+                                    elif (pending_axes and time.monotonic()
+                                          - last_analog_report >= ANALOG_REPORT_INTERVAL):
+                                        flush_axes()
+                                    frame_has_output = False
+                                    frame_open = False
+                            elif event.type in (e.EV_KEY, e.EV_ABS, e.EV_REL):
                                 code = event.code
+                                value = event.value
+                                frame_open = True
                                 if event.type == e.EV_KEY and self._button_map:
                                     code = self._button_map.get(code, code)
-                                ui.write(event.type, code, event.value)
-                                ui.syn()
+                                elif (event.type == e.EV_ABS
+                                      and code in COALESCED_AXES
+                                      and self._target["name"] == VIRTUAL_XBOX["name"]):
+                                    if code in STICK_AXES:
+                                        value = xbox_stick_value(value)
+                                    frame_axes[code] = value
+                                    continue
+                                ui.write(event.type, code, value)
+                                frame_has_output = True
             except OSError:
                 pass
         finally:
