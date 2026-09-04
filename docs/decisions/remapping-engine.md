@@ -55,6 +55,30 @@ to agree between the two drivers). A second, per-target table therefore swaps
 per-source quirk table (quirk first: source -> standard, then target: standard -> target).
 A future `xbox-ps5` mode would need the inverse entry for the virtual DualSense target.
 
+### Analog reports are bounded and keep only the latest value
+
+Bluetooth DualSense devices can report hundreds of stick samples per second. Forwarding
+every sample creates a downstream queue in Wine/SDL games, so a game may continue applying
+old steering values after the physical stick has returned to center. DualSense sticks also
+use unsigned `0..255` values, while an Xbox target expects signed values centered on zero.
+
+For the virtual Xbox target, the remapper therefore:
+
+- translates stick values to `-32768..32767`;
+- snaps source values `120..135` to zero to absorb center jitter;
+- collects the latest stick and trigger values from each source `SYN_REPORT` frame;
+- emits at most one analog report every 1/60 second; and
+- flushes pending analog values immediately when a digital or relative event must be sent.
+
+Triggers are part of the same policy because a half-held L2/R2 value jitters continuously.
+Treating trigger updates as immediate would flush pending sticks at the raw Bluetooth report
+rate and recreate the same backlog. Fully pressed triggers often appear unaffected because
+their value settles at the endpoint and stops generating updates.
+
+Buttons, D-pad axes, and relative events are not rate-limited. The maximum added latency for
+an analog transition is one 60 Hz interval (about 16.7 ms), while intermediate stale values
+are replaced rather than queued.
+
 ### The event loop must be interruptible while idle
 
 `evdev`'s blocking read waits for the next event. The first implementation tried to stop a
