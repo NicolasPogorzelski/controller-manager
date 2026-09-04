@@ -7,7 +7,7 @@ wired Xbox 360 pad is named exactly like VIRTUAL_XBOX by xpad and must still
 be adopted.
 
 Stubs ControllerInstance, _scan, evdev and the config I/O, so no hardware /
-D-Bus / sudo / real config file is touched. Skips (exit 0) if the daemon's
+D-Bus / sudo / real config file is touched. Skips (exit 77) if the daemon's
 runtime deps are unavailable, mirroring test_reconcile.py."""
 import importlib.util, os, sys
 
@@ -20,7 +20,8 @@ try:
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
     print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
-    sys.exit(0)
+    # 77, not 0: validate-repo.sh must tell "never ran" from "passed".
+    sys.exit(77)
 
 # Never touch the user's real controller-modes.json. config_store feeds what
 # a newly built manager loads, so a scenario can replay a 'previous session'.

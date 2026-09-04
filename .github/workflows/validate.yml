@@ -12,8 +12,9 @@ jobs:
 
       # Install the daemon's runtime deps as SYSTEM packages so the system
       # python3 that validate-repo.sh invokes can import them. Without this the
-      # unit tests hit ModuleNotFoundError and self-skip (exit 0) - CI went
-      # green because the tests never ran, not because they passed. Using apt
+      # unit tests hit ModuleNotFoundError and self-skip - CI went green
+      # because the tests never ran, not because they passed. REQUIRE_TESTS
+      # below makes that loud instead of trusting this step alone. Using apt
       # (not actions/setup-python + pip) avoids compiling evdev/dbus/PyGObject
       # C extensions, which is slow and flaky.
       - name: Install runtime dependencies
@@ -22,6 +23,8 @@ jobs:
           sudo apt-get install -y python3-evdev python3-dbus python3-gi
 
       - name: Repository validation
+        env:
+          REQUIRE_TESTS: 1
         run: ./scripts/validate-repo.sh
 
       - name: Shell scripts (shellcheck)

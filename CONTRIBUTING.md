@@ -36,6 +36,15 @@ behaviour (numbering, per-pad gating, reconnect isolation) use the
   python3 -m py_compile controller-manager.py
   ```
 
+## Tests
+
+Tests under `tests/` are plain scripts - `python3 tests/test_reconcile.py` - that print
+`OK` / `FAIL` lines and exit non-zero on failure. They need the daemon's runtime
+dependencies; when those are missing a test prints `SKIP` and exits **77**, never 0.
+`scripts/validate-repo.sh` relies on that distinction, because an exit code shared with
+success cannot tell a suite that never ran from one that passed. CI sets
+`REQUIRE_TESTS=1`, which turns a skip into a failure.
+
 ## Commit messages
 
 Conventional Commits with a scope are required:

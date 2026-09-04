@@ -13,7 +13,7 @@ Guards:
     watch_holders end to end;
   * _monitor keeps polling after a _poll() raises, instead of dying.
 
-Loads the real module (no stubs on the function under test). Skips (exit 0)
+Loads the real module (no stubs on the function under test). Skips (exit 77)
 when the daemon's runtime deps are unavailable, mirroring test_reconcile.py."""
 import importlib.util, os, sys
 
@@ -26,7 +26,8 @@ try:
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
     print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
-    sys.exit(0)
+    # 77, not 0: validate-repo.sh must tell "never ran" from "passed".
+    sys.exit(77)
 
 fails = []
 def check(cond, msg):

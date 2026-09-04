@@ -105,14 +105,37 @@ fi
 # =============================================================================
 # Check 7: unit tests (reconcile logic, dbusmenu id model, ...)
 # =============================================================================
+# A test whose runtime deps are missing exits 77, not 0, so "never ran" stays
+# distinguishable from "passed". Both exiting 0 is how CI once reported green
+# without running a single test (see .github/workflows/validate.yml). A skip is
+# reported but tolerated locally, where evdev/dbus/gi may be absent; CI sets
+# REQUIRE_TESTS=1 so that a suite which cannot run counts as a failure.
 echo "Check 7: unit tests"
 
+SKIPPED=0
 while read -r testfile; do
-    if ! python3 "${testfile}" >/dev/null 2>&1; then
-        echo "  ${testfile#"${REPO_ROOT}"/}: FAILED"
+    rel="${testfile#"${REPO_ROOT}"/}"
+    status=0
+    python3 "${testfile}" >/dev/null 2>&1 || status=$?
+    if [[ "${status}" -eq 77 ]]; then
+        echo "  ${rel}: SKIPPED (runtime deps missing)"
+        SKIPPED=$((SKIPPED + 1))
+        if [[ -n "${REQUIRE_TESTS:-}" ]]; then
+            echo "x" >> "${ERROR_LOG}"
+        fi
+    elif [[ "${status}" -ne 0 ]]; then
+        echo "  ${rel}: FAILED"
         echo "x" >> "${ERROR_LOG}"
     fi
 done < <(find "${REPO_ROOT}/tests" -name "test_*.py" -type f 2>/dev/null | sort)
+
+if [[ "${SKIPPED}" -gt 0 ]]; then
+    if [[ -n "${REQUIRE_TESTS:-}" ]]; then
+        echo "  ${SKIPPED} test(s) skipped; REQUIRE_TESTS is set - counted as failures"
+    else
+        echo "  ${SKIPPED} test(s) skipped - install python3-evdev, python3-dbus, python3-gi"
+    fi
+fi
 
 # =============================================================================
 # Check 8: plain-ASCII punctuation

@@ -18,7 +18,7 @@ a glance at all times outside a running game.
 Stubs the gate, holder scan, LED helpers, client classification and
 controller scan; the real ControllerInstance runs. The real is_steam_client
 and steam_game_running are smoke-tested against live /proc first. Skips
-(exit 0) when the daemon's runtime deps are unavailable, mirroring
+(exit 77) when the daemon's runtime deps are unavailable, mirroring
 test_reconcile.py."""
 import importlib.util, os, subprocess, sys
 
@@ -31,7 +31,8 @@ try:
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
     print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
-    sys.exit(0)
+    # 77, not 0: validate-repo.sh must tell "never ran" from "passed".
+    sys.exit(77)
 
 fails = []
 def check(cond, msg):

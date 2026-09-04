@@ -4,7 +4,7 @@ a Bluetooth pad re-appearing on a *new* evdev node after a reconnect is rebound
 in place (no tray-menu churn) rather than removed and re-added.
 
 Stubs ControllerInstance and _scan, so no hardware / D-Bus / sudo is touched.
-Skips (exit 0) if the daemon's runtime deps are unavailable, mirroring how
+Skips (exit 77) if the daemon's runtime deps are unavailable, mirroring how
 validate-repo.sh skips shellcheck when it is not installed."""
 import importlib.util, os, sys
 
@@ -17,7 +17,8 @@ try:
     spec.loader.exec_module(cm)
 except ModuleNotFoundError as ex:
     print(f"SKIP: runtime dependency missing ({ex.name}) - needs evdev/dbus/gi")
-    sys.exit(0)
+    # 77, not 0: validate-repo.sh must tell "never ran" from "passed".
+    sys.exit(77)
 
 # Never touch the user's real controller-modes.json: adoption persists the
 # assigned player numbers through save_config since the player-LED feature.
